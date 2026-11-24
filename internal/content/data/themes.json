@@ -1,0 +1,22 @@
+{
+  "themes": [
+    {
+      "slug": "foods",
+      "name": "Comidas",
+      "kind": "words",
+      "words": ["Pizza", "Feijoada", "Brigadeiro", "Pão de queijo", "Sushi"]
+    },
+    {
+      "slug": "animals",
+      "name": "Animais",
+      "kind": "words",
+      "words": ["Cachorro", "Gato", "Elefante", "Golfinho", "Papagaio"]
+    },
+    {
+      "slug": "players",
+      "name": "Pessoas da sala",
+      "kind": "players",
+      "words": []
+    }
+  ]
+}

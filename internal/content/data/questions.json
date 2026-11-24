@@ -1,0 +1,12 @@
+{
+  "questions": [
+    { "kind": "words", "themeSlug": "", "text": "Você levaria isso numa viagem?" },
+    { "kind": "words", "themeSlug": "", "text": "Isso costuma agradar a maioria das pessoas?" },
+    { "kind": "words", "themeSlug": "", "text": "Em que momento do dia você mais pensa nisso?" },
+    { "kind": "words", "themeSlug": "", "text": "Dá para encontrar isso perto da sua casa?" },
+    { "kind": "words", "themeSlug": "foods", "text": "Isso é mais doce ou mais salgado?" },
+    { "kind": "players", "themeSlug": "", "text": "Essa pessoa costuma chegar atrasada?" },
+    { "kind": "players", "themeSlug": "", "text": "Essa pessoa sobreviveria numa ilha deserta?" },
+    { "kind": "players", "themeSlug": "", "text": "Essa pessoa costuma exagerar nas histórias?" }
+  ]
+}

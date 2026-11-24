@@ -1,0 +1,143 @@
+# Especificação da dinâmica — Jogo de festa "impostor" (PWA)
+
+> Nome do jogo: a definir. Inspirado em jogos de festa do tipo "quem está fora do loop", mas com salas online, um celular por jogador e conteúdo próprio.
+
+**Status:** todas as decisões abaixo estão confirmadas. As sugestões feitas durante o planejamento foram aceitas, exceto a exclusão de jogadores da lista de possíveis temas, que foi descartada.
+
+---
+
+## 1. Visão geral
+
+- Jogo de festa **presencial**: as pessoas estão no mesmo lugar, cada uma com o próprio celular.
+- Todos recebem uma palavra secreta (ou um nome, no tema "Pessoas da sala"), **menos um jogador, o impostor**.
+- As perguntas são **lidas e respondidas em voz alta**. O app não recebe respostas digitadas.
+- No fim da rodada, todos votam em quem acham que é o impostor.
+- Vence a partida quem somar mais pontos ao final das rodadas.
+
+## 2. Plataforma e tecnologia
+
+- **Front-end:** React, como PWA focado em celular.
+- **Back-end:** Go com PostgreSQL.
+- **Idioma:** somente português (pt-BR) no início.
+- **Contas:** sem cadastro. A pessoa entra com um nome.
+
+## 3. Salas
+
+- Qualquer pessoa cria uma sala e se torna o **anfitrião**.
+- Cada sala tem um **código** para entrada. Quem entra informa o código e o seu nome.
+- **Jogadores por sala:** mínimo de **3**, máximo de **20**.
+- **Entrada:** novos jogadores só podem entrar no **lobby** e **entre rodadas**.
+- **Retenção dos dados:** a sala é apagada **1 hora depois de ficar vazia**, ou **24 horas depois de criada**, mesmo que ainda tenha pessoas.
+- Código curto (4 a 5 caracteres), sem letras ambíguas (O/0, I/1), com checagem de colisão.
+- Nome repetido recebe um número automaticamente.
+- Se o anfitrião sair ou ficar offline, a função passa para o jogador mais antigo na sala.
+- Reconexão: o jogador volta à mesma sala e ao mesmo lugar (token guardado no aparelho), importante porque o iOS suspende conexões em segundo plano.
+
+## 4. Configuração da partida
+
+Definida pelo anfitrião ao **criar a sala**:
+
+- **Número de rodadas:** 3, 5, 8, 10 ou 12.
+- **Tempo padrão por turno de pergunta:** 3 minutos.
+
+O **tema** não é definido na criação: é escolhido a cada rodada (ver seção 7).
+
+## 5. Fluxo de uma rodada
+
+1. **Escolha do tema** pelo anfitrião.
+2. **Revelação do papel** em cada celular.
+3. **Perguntas em roda** (seção 8), com histórico (seção 9).
+4. **Discussão** livre, com cronômetro opcional.
+5. **Votação.**
+6. **Resultado**, com palpite da palavra pelo impostor se ele for descoberto.
+7. **Placar** parcial e início da próxima rodada, até acabarem as rodadas.
+
+### Revelação do papel
+- O papel (palavra ou "você é o impostor") aparece apenas enquanto a pessoa **mantém o botão pressionado**, para ninguém espiar.
+
+## 6. Regras
+
+### Impostor
+- Existe **apenas 1 impostor por rodada**.
+- O sorteio não repete o impostor até todos terem sido, depois o ciclo recomeça.
+
+### Votação
+- Fecha quando **todos os jogadores conectados votarem** ou após **5 minutos**.
+- Quem não votar, ou estiver offline, conta como **abstenção**. Jogador offline não trava a votação.
+- O impostor só é **descoberto** se tiver **mais votos do que qualquer outro jogador**.
+- **Empate** (de qualquer tipo): o impostor escapa.
+
+### Palpite do impostor
+- Se for descoberto, o impostor escolhe a palavra entre ~8 opções da categoria, com a correta entre elas. Sem texto livre.
+- No tema "Pessoas da sala", as opções são os nomes dos jogadores.
+
+### Pontuação
+| Situação | Pontos |
+|---|---|
+| Jogador votou no impostor | +1 para ele |
+| Impostor não foi descoberto | +2 para o impostor |
+| Impostor descoberto, mas acerta a palavra | +1 para o impostor |
+
+## 7. Temas
+
+- Os temas são um **catálogo fixo** do jogo. O anfitrião **escolhe entre os disponíveis**, não digita.
+- A escolha é feita **no início de cada rodada**, sem lista prévia. O mesmo tema pode ser escolhido várias vezes.
+- Existe a opção **"Sorteio"**, que escolhe um tema ao acaso.
+- A mesma **palavra** não se repete dentro da sala, mesmo que o tema se repita.
+- Cada tema tem o seu **banco de palavras** e o seu **banco de perguntas genéricas**, que servem para qualquer palavra do tema. Assim o impostor consegue blefar e quem sabe a palavra consegue responder.
+- Conteúdo inicial: 8 a 10 temas, com ~40 palavras cada. Conteúdo próprio, não copiado de outros jogos.
+
+### Tema "Pessoas da sala"
+- Os próprios jogadores da sala são o tema.
+- Primeiro sorteia-se o impostor, depois o tema entre os outros jogadores. O impostor não pode ser o tema.
+- Todos, menos o impostor, veem o nome sorteado, inclusive a própria pessoa sorteada.
+- Banco de perguntas próprio, sobre hábitos e personalidade, com a expressão "essa pessoa" para não depender de gênero. Evitar aparência, saúde e temas sensíveis.
+- Todos os jogadores podem ser sorteados como tema. A mesma pessoa só é sorteada de novo depois de todos terem sido.
+
+## 8. Perguntas e turnos
+
+- **Roda:** a ordem dos jogadores é embaralhada. Cada um **pergunta ao próximo** e o último pergunta ao primeiro. Todos perguntam uma vez e respondem uma vez.
+- **Tela de todos:** mostra "quem pergunta para quem" e o texto da pergunta.
+- A pergunta é **lida em voz alta** por quem pergunta e **respondida em voz alta**.
+- **Avançar:** quem acabou de responder toca em **"Prosseguir"**. Ele é também o próximo a perguntar. O **anfitrião** pode avançar ou pular como reserva.
+- **Tempo por turno:** padrão de **3 minutos**, pensado para permitir discussão, repetição da pergunta e tempo para pensar.
+- **Estender ou prosseguir:** tanto o anfitrião quanto quem responde podem estender o tempo ou prosseguir antes.
+- Extensão de +1 minuto a cada toque, aviso 30 segundos antes do fim e avanço automático quando o tempo acabar.
+- No último turno, quem responde toca em "Ir para a discussão".
+
+## 9. Histórico de perguntas
+
+Funcionalidade **muito importante**.
+
+- Todos os participantes podem **voltar e avançar** entre a pergunta anterior e a atual.
+- O histórico inclui **somente a rodada atual**.
+- Não é possível avançar além do **turno atual**.
+- Cada participante tem seu **próprio ponto de visualização**.
+- No turno mais recente, a tela acompanha o jogo sozinha. Se a pessoa voltou, a tela não é puxada: aparece um aviso de novo turno com botão "Ir para o atual".
+- O botão "Prosseguir" só aparece na visão do turno atual. Quando for a vez de alguém responder ou perguntar, o celular vibra e aparece um aviso fixo, mesmo que a pessoa esteja olhando o histórico.
+- Durante a discussão e a votação, o histórico mostra todos os turnos da rodada.
+- O servidor envia apenas os turnos até o atual, nunca perguntas futuras. O histórico nunca contém papel nem palavra.
+
+## 10. Fim da partida
+
+- A partida termina depois da **última rodada definida** na criação da sala.
+- **Encerrar antes:** existe uma opção para encerrar a partida, com **botão de confirmação** para evitar acidentes (restrita ao anfitrião). O pódio mostra a pontuação até ali.
+- Não há limite nem estimativa de duração: as pessoas jogam até terminar.
+- Se os jogadores caírem **abaixo de 3** durante a partida, o anfitrião pode **encerrá-la**.
+- O pódio mostra os primeiros colocados, empates dividem a posição.
+- "Jogar de novo" mantém a sala e os jogadores, e o anfitrião escolhe de novo o número de rodadas.
+
+## 11. Segurança e integridade
+
+- O **servidor é a fonte da verdade**: a palavra só é enviada às conexões de quem não é impostor, e o impostor só é revelado no resultado.
+- Limite de taxa para criar e entrar em salas, e validação do nome (tamanho e caracteres).
+- Teto técnico de 20 jogadores aplicado no servidor.
+- Tempo limite nas fases (turno e votação) para ninguém travar o jogo.
+
+## 12. Decisões finais e próximos passos
+
+- Abaixo de 3 jogadores durante a partida: o anfitrião pode encerrar a partida.
+- Entrada de novos jogadores: somente no lobby e entre rodadas.
+- Pontuação e demais sugestões: aceitas.
+- Conteúdo (temas, palavras e perguntas): será gerado na etapa de implementação.
+- **Próximo passo:** estrutura do banco de dados PostgreSQL (diagrama e tabelas em alto nível). Depois, mensagens WebSocket entre React e Go.
