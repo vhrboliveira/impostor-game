@@ -4,84 +4,71 @@ package storage_test
 
 import (
 	"context"
-	"io"
-	"log/slog"
-	"net/url"
-	"os"
-	"strings"
+	"database/sql"
 	"testing"
 
 	"github.com/stretchr/testify/require"
 	"github.com/uptrace/bun"
 	"github.com/uptrace/bun/migrate"
 
-	"github.com/vhrboliveira/impostor-game/internal/storage"
-	"github.com/vhrboliveira/impostor-game/internal/storage/migrations"
+	"github.com/vhrboliveira/impostor-game/internal/storage/storagetest"
 )
 
-const defaultTestDSN = "postgres://impostor:impostor@localhost:5436/impostor_test?sslmode=disable"
+// The helpers live in package storagetest so other packages' integration tests can use them.
 
-// newTestDB connects to TEST_DATABASE_URL and gives the test a pristine, empty schema.
-// Run these tests with `-p 1` (make test-integration): they share one database.
-func newTestDB(t *testing.T) *bun.DB {
-	t.Helper()
+func newTestDB(t *testing.T) *bun.DB { return storagetest.NewTestDB(t) }
 
-	dsn := os.Getenv("TEST_DATABASE_URL")
-	if dsn == "" {
-		dsn = defaultTestDSN
-	}
-	requireTestDatabase(t, dsn)
+func newMigrator(t *testing.T, db *bun.DB) *migrate.Migrator { return storagetest.NewMigrator(t, db) }
 
-	ctx := context.Background()
-	db, err := storage.Open(ctx, dsn, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	require.NoError(t, err, "is Postgres running? try `make db-up`")
-	t.Cleanup(func() { _ = db.Close() })
-
-	_, err = db.ExecContext(ctx, "DROP SCHEMA IF EXISTS public CASCADE")
-	require.NoError(t, err)
-	_, err = db.ExecContext(ctx, "CREATE SCHEMA public")
-	require.NoError(t, err)
-
-	return db
-}
-
-// requireTestDatabase refuses to wipe a database whose name does not end with _test.
-func requireTestDatabase(t *testing.T, dsn string) {
-	t.Helper()
-
-	u, err := url.Parse(dsn)
-	require.NoError(t, err)
-	name := strings.TrimPrefix(u.Path, "/")
-	require.True(t, strings.HasSuffix(name, "_test"),
-		"refusing to reset database %q: its name must end with _test", name)
-}
-
-func newMigrator(t *testing.T, db *bun.DB) *migrate.Migrator {
-	t.Helper()
-
-	migrator := migrate.NewMigrator(db, migrations.Migrations)
-	require.NoError(t, migrator.Init(context.Background()))
-	return migrator
-}
-
-// newMigratedDB returns a test database with every migration applied.
-func newMigratedDB(t *testing.T) *bun.DB {
-	t.Helper()
-
-	db := newTestDB(t)
-	group, err := newMigrator(t, db).Migrate(context.Background())
-	require.NoError(t, err)
-	require.False(t, group.IsZero(), "expected migrations to be applied")
-	return db
-}
+func newMigratedDB(t *testing.T) *bun.DB { return storagetest.NewMigratedDB(t) }
 
 func listTables(t *testing.T, db *bun.DB) []string {
 	t.Helper()
 
 	var tables []string
-	err := db.NewRaw(`SELECT table_name FROM information_schema.tables
-		WHERE table_schema = 'public' AND table_name NOT LIKE 'bun_%'
-		ORDER BY table_name`).Scan(context.Background(), &tables)
+	err := db.NewSelect().
+		TableExpr("information_schema.tables").
+		Column("table_name").
+		Where("table_schema = 'public'").
+		Where("table_name NOT LIKE 'bun_%'").
+		Order("table_name").
+		Scan(context.Background(), &tables)
 	require.NoError(t, err)
 	return tables
+}
+
+// The fixtures use the same models and query builder as the repositories, so the column names
+// live in one place (models.go).
+
+// insert writes each model (a pointer to a struct or to a slice of structs) and reads every
+// column back, so ids and database defaults are filled in.
+func insert(t *testing.T, db bun.IDB, models ...any) {
+	t.Helper()
+	for _, model := range models {
+		_, err := db.NewInsert().Model(model).Returning("*").Exec(context.Background())
+		require.NoError(t, err)
+	}
+}
+
+// tryInsert writes one model and returns the database error, for the constraint tests.
+func tryInsert(db bun.IDB, model any) error {
+	_, err := db.NewInsert().Model(model).Exec(context.Background())
+	return err
+}
+
+// count returns how many rows the table of model has, e.g. count(t, db, (*storage.Room)(nil)).
+func count(t *testing.T, db bun.IDB, model any) int {
+	t.Helper()
+	n, err := db.NewSelect().Model(model).Count(context.Background())
+	require.NoError(t, err)
+	return int(n)
+}
+
+// exec runs an update or delete built with the query builder and fails the test on error.
+func exec(t *testing.T, q interface {
+	Exec(ctx context.Context, dest ...any) (sql.Result, error)
+}) {
+	t.Helper()
+	_, err := q.Exec(context.Background())
+	require.NoError(t, err)
 }

@@ -24,7 +24,7 @@ func discardLogger() *slog.Logger {
 func do(t *testing.T, handler http.Handler, method, target string) *httptest.ResponseRecorder {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, httptest.NewRequest(method, target, nil))
+	handler.ServeHTTP(rec, httptest.NewRequestWithContext(t.Context(), method, target, nil))
 	return rec
 }
 
@@ -85,7 +85,7 @@ func TestRequestID(t *testing.T) {
 	})
 
 	t.Run("keeps a valid client id", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/healthz", nil)
 		req.Header.Set("X-Request-Id", "client-id_42")
 		rec := httptest.NewRecorder()
 
@@ -95,7 +95,7 @@ func TestRequestID(t *testing.T) {
 	})
 
 	t.Run("replaces an invalid client id", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodGet, "/healthz", nil)
 		req.Header.Set("X-Request-Id", "bad id\nwith newline")
 		rec := httptest.NewRecorder()
 

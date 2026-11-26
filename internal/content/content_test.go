@@ -37,7 +37,7 @@ func TestLoad_EmbeddedCatalogIsValid(t *testing.T) {
 
 func TestLoad_RejectsUnknownFields(t *testing.T) {
 	fsys := fstest.MapFS{
-		"data/themes.json":    {Data: []byte(`{"themes":[{"slug":"x","nmae":"typo"}]}`)},
+		"data/themes.json":    {Data: []byte(`{"themes":[{"slug":"x","nam":"typo"}]}`)},
 		"data/questions.json": {Data: []byte(`{"questions":[]}`)},
 	}
 

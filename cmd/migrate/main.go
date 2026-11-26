@@ -82,7 +82,7 @@ func runDatabase(ctx context.Context, command string, out io.Writer) error {
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	migrator := migrate.NewMigrator(db, migrations.Migrations)
 	if err := migrator.Init(ctx); err != nil {

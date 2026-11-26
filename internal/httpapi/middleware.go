@@ -163,7 +163,7 @@ func recoverer(logger *slog.Logger) Middleware {
 				if rec == nil {
 					return
 				}
-				if rec == http.ErrAbortHandler {
+				if err, ok := rec.(error); ok && errors.Is(err, http.ErrAbortHandler) {
 					panic(rec)
 				}
 				logger.ErrorContext(r.Context(), "panic recovered",

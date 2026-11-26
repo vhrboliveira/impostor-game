@@ -32,8 +32,9 @@ CREATE TABLE questions (
     theme_id bigint,
     text     text NOT NULL,
     CONSTRAINT questions_kind_check CHECK (kind IN ('words', 'players')),
-    -- MATCH SIMPLE: not enforced while theme_id is NULL. Requires PostgreSQL 15+ for the unique below.
+    -- MATCH SIMPLE: not enforced while theme_id is NULL.
     CONSTRAINT questions_theme_kind_fkey FOREIGN KEY (theme_id, kind)
         REFERENCES themes (id, kind) ON DELETE CASCADE,
+    -- NULLS NOT DISTINCT: generic questions (theme_id NULL) are unique per kind too.
     CONSTRAINT questions_kind_theme_text_key UNIQUE NULLS NOT DISTINCT (kind, theme_id, text)
 );

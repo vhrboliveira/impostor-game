@@ -1,6 +1,7 @@
 services:
   postgres:
-    image: postgres:19-alpine
+    # Same major version as the CI (.github/workflows/ci.yml).
+    image: postgres:17-alpine
     restart: unless-stopped
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-impostor}
@@ -9,6 +10,8 @@ services:
     ports:
       - "5436:5432"
     volumes:
+      # Postgres 17 layout. Images 18+ refuse this mount: they need /var/lib/postgresql and a
+      # pg_upgrade of the existing data.
       - postgres-data:/var/lib/postgresql/data
       # Scripts here run only the first time the volume is created (see `make db-reset`).
       - ./docker/postgres/init:/docker-entrypoint-initdb.d:ro

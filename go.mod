@@ -3,6 +3,7 @@ module github.com/vhrboliveira/impostor-game
 go 1.27.4
 
 require (
+	github.com/coder/websocket v1.8.15
 	github.com/stretchr/testify v1.12.1
 	github.com/uptrace/bun v1.3.0
 	github.com/uptrace/bun/dialect/pgdialect v1.3.0

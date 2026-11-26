@@ -8,7 +8,7 @@ import (
 )
 
 func TestPhaseNext_FollowsTheRoundOrder(t *testing.T) {
-	want := []Phase{PhaseReveal, PhaseQuestions, PhaseDiscussion, PhaseVoting, PhaseResult}
+	want := []Phase{PhaseReveal, PhaseQuestions, PhaseDiscussion, PhaseVoting, PhaseGuess, PhaseResult}
 
 	current := PhaseThemeSelection
 	for _, expected := range want {

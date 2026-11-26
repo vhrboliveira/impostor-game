@@ -12,7 +12,9 @@ const (
 	PhaseQuestions      Phase = "questions"
 	PhaseDiscussion     Phase = "discussion"
 	PhaseVoting         Phase = "voting"
-	PhaseResult         Phase = "result"
+	// PhaseGuess only happens when the impostor was found: they try to guess the secret.
+	PhaseGuess  Phase = "guess"
+	PhaseResult Phase = "result"
 )
 
 var phaseOrder = []Phase{
@@ -21,6 +23,7 @@ var phaseOrder = []Phase{
 	PhaseQuestions,
 	PhaseDiscussion,
 	PhaseVoting,
+	PhaseGuess,
 	PhaseResult,
 }
 

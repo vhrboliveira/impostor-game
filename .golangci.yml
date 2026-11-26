@@ -14,6 +14,13 @@ linters:
     - noctx
     - nolintlint
     - unconvert
+  settings:
+    errcheck:
+      # CLI output to an io.Writer: a failed write has nowhere better to be reported.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
 
 formatters:
   enable:

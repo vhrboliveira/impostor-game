@@ -42,8 +42,7 @@ func TestSeedCatalog_KeepsGenericQuestionsWithoutATheme(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, storage.SeedCatalog(ctx, db, catalog))
 
-	var generic int
-	err = db.NewRaw("SELECT count(*) FROM questions WHERE theme_id IS NULL").Scan(ctx, &generic)
+	generic, err := db.NewSelect().Model((*storage.Question)(nil)).Where("theme_id IS NULL").Count(ctx)
 	require.NoError(t, err)
 
 	expected := 0
@@ -52,5 +51,5 @@ func TestSeedCatalog_KeepsGenericQuestionsWithoutATheme(t *testing.T) {
 			expected++
 		}
 	}
-	assert.Equal(t, expected, generic)
+	assert.EqualValues(t, expected, generic)
 }

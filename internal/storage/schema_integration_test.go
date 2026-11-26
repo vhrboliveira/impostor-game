@@ -3,121 +3,151 @@
 package storage_test
 
 import (
-	"context"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/require"
 	"github.com/uptrace/bun"
+
+	"github.com/vhrboliveira/impostor-game/internal/storage"
 )
 
-func insertID(t *testing.T, db *bun.DB, query string, args ...any) string {
-	t.Helper()
-
-	var id string
-	require.NoError(t, db.NewRaw(query, args...).Scan(context.Background(), &id))
-	return id
+// schemaFixture builds the rows the constraint tests need, one model at a time.
+type schemaFixture struct {
+	t  *testing.T
+	db *bun.DB
 }
 
-func exec(db *bun.DB, query string, args ...any) error {
-	_, err := db.ExecContext(context.Background(), query, args...)
-	return err
+func (f schemaFixture) room() *storage.Room {
+	r := &storage.Room{Code: "ABCDE", ExpiresAt: time.Now().Add(24 * time.Hour)}
+	insert(f.t, f.db, r)
+	return r
+}
+
+func (f schemaFixture) player(roomID, name string) *storage.Player {
+	p := &storage.Player{RoomID: roomID, Name: name, TokenHash: "hash-" + name}
+	insert(f.t, f.db, p)
+	return p
+}
+
+func (f schemaFixture) match(roomID string) *storage.Match {
+	m := &storage.Match{RoomID: roomID, Number: 1, TotalRounds: 3}
+	insert(f.t, f.db, m)
+	return m
+}
+
+func (f schemaFixture) theme(slug, kind string) *storage.Theme {
+	th := &storage.Theme{Slug: slug, Name: slug, Kind: kind}
+	insert(f.t, f.db, th)
+	return th
+}
+
+func (f schemaFixture) word(themeID int64, text string) *storage.Word {
+	w := &storage.Word{ThemeID: themeID, Text: text}
+	insert(f.t, f.db, w)
+	return w
 }
 
 // These tests prove that the database itself enforces the rules the game relies on.
 func TestSchemaConstraints(t *testing.T) {
-	t.Run("words cannot belong to a players theme", func(t *testing.T) {
-		db := newMigratedDB(t)
-		themeID := insertID(t, db, "INSERT INTO themes (slug, name, kind) VALUES ('p', 'Pessoas', 'players') RETURNING id::text")
+	setup := func(t *testing.T) schemaFixture {
+		return schemaFixture{t: t, db: newMigratedDB(t)}
+	}
 
-		err := exec(db, "INSERT INTO words (theme_id, text) VALUES (?, 'Ana')", themeID)
+	t.Run("words cannot belong to a players theme", func(t *testing.T) {
+		f := setup(t)
+		players := f.theme("p", "players")
+
+		err := tryInsert(f.db, &storage.Word{ThemeID: players.ID, Text: "Ana"})
 
 		require.Error(t, err)
 	})
 
 	t.Run("generic questions cannot be duplicated", func(t *testing.T) {
-		db := newMigratedDB(t)
-		require.NoError(t, exec(db, "INSERT INTO questions (kind, text) VALUES ('words', 'Mesma pergunta?')"))
+		f := setup(t)
+		insert(t, f.db, &storage.Question{Kind: "words", Text: "Mesma pergunta?"})
 
-		err := exec(db, "INSERT INTO questions (kind, text) VALUES ('words', 'Mesma pergunta?')")
+		err := tryInsert(f.db, &storage.Question{Kind: "words", Text: "Mesma pergunta?"})
 
 		require.Error(t, err)
 	})
 
 	t.Run("a question kind must match its theme kind", func(t *testing.T) {
-		db := newMigratedDB(t)
-		themeID := insertID(t, db, "INSERT INTO themes (slug, name, kind) VALUES ('f', 'Comidas', 'words') RETURNING id::text")
+		f := setup(t)
+		foods := f.theme("f", "words")
 
-		err := exec(db, "INSERT INTO questions (kind, theme_id, text) VALUES ('players', ?, 'Pergunta')", themeID)
+		err := tryInsert(f.db, &storage.Question{Kind: "players", ThemeID: &foods.ID, Text: "Pergunta"})
 
 		require.Error(t, err)
 	})
 
 	t.Run("a room has at most one host", func(t *testing.T) {
-		db := newMigratedDB(t)
-		roomID := insertID(t, db, "INSERT INTO rooms (code, expires_at) VALUES ('ABCDE', now() + interval '24 hours') RETURNING id::text")
-		require.NoError(t, exec(db, "INSERT INTO players (room_id, name, is_host, token_hash) VALUES (?, 'Ana', true, 'h1')", roomID))
+		f := setup(t)
+		r := f.room()
+		insert(t, f.db, &storage.Player{RoomID: r.ID, Name: "Ana", IsHost: true, TokenHash: "h1"})
 
-		err := exec(db, "INSERT INTO players (room_id, name, is_host, token_hash) VALUES (?, 'Bia', true, 'h2')", roomID)
+		err := tryInsert(f.db, &storage.Player{RoomID: r.ID, Name: "Bia", IsHost: true, TokenHash: "h2"})
 
 		require.Error(t, err)
 	})
 
 	t.Run("player names are unique within a room", func(t *testing.T) {
-		db := newMigratedDB(t)
-		roomID := insertID(t, db, "INSERT INTO rooms (code, expires_at) VALUES ('ABCDE', now() + interval '24 hours') RETURNING id::text")
-		require.NoError(t, exec(db, "INSERT INTO players (room_id, name, token_hash) VALUES (?, 'Ana', 'h1')", roomID))
+		f := setup(t)
+		r := f.room()
+		f.player(r.ID, "Ana")
 
-		err := exec(db, "INSERT INTO players (room_id, name, token_hash) VALUES (?, 'Ana', 'h2')", roomID)
+		err := tryInsert(f.db, &storage.Player{RoomID: r.ID, Name: "Ana", TokenHash: "h2"})
 
 		require.Error(t, err)
 	})
 
 	t.Run("matches only allow the supported numbers of rounds", func(t *testing.T) {
-		db := newMigratedDB(t)
-		roomID := insertID(t, db, "INSERT INTO rooms (code, expires_at) VALUES ('ABCDE', now() + interval '24 hours') RETURNING id::text")
+		f := setup(t)
+		r := f.room()
 
-		err := exec(db, "INSERT INTO matches (room_id, number, total_rounds) VALUES (?, 1, 4)", roomID)
+		err := tryInsert(f.db, &storage.Match{RoomID: r.ID, Number: 1, TotalRounds: 4})
 
 		require.Error(t, err)
-		require.NoError(t, exec(db, "INSERT INTO matches (room_id, number, total_rounds) VALUES (?, 1, 5)", roomID))
+		require.NoError(t, tryInsert(f.db, &storage.Match{RoomID: r.ID, Number: 1, TotalRounds: 5}))
 	})
 
 	t.Run("a player cannot vote for themselves", func(t *testing.T) {
-		db := newMigratedDB(t)
-		roomID := insertID(t, db, "INSERT INTO rooms (code, expires_at) VALUES ('ABCDE', now() + interval '24 hours') RETURNING id::text")
-		playerID := insertID(t, db, "INSERT INTO players (room_id, name, token_hash) VALUES (?, 'Ana', 'h1') RETURNING id::text", roomID)
-		matchID := insertID(t, db, "INSERT INTO matches (room_id, number, total_rounds) VALUES (?, 1, 3) RETURNING id::text", roomID)
-		roundID := insertID(t, db, "INSERT INTO rounds (match_id, number) VALUES (?, 1) RETURNING id::text", matchID)
+		f := setup(t)
+		r := f.room()
+		ana := f.player(r.ID, "Ana")
+		round := &storage.Round{MatchID: f.match(r.ID).ID, Number: 1}
+		insert(t, f.db, round)
 
-		err := exec(db, "INSERT INTO votes (round_id, voter_id, target_id) VALUES (?, ?, ?)", roundID, playerID, playerID)
+		err := tryInsert(f.db, &storage.Vote{RoundID: round.ID, VoterID: ana.ID, TargetID: &ana.ID})
 
 		require.Error(t, err)
 	})
 
 	t.Run("a round cannot have both a word and a player as its secret", func(t *testing.T) {
-		db := newMigratedDB(t)
-		roomID := insertID(t, db, "INSERT INTO rooms (code, expires_at) VALUES ('ABCDE', now() + interval '24 hours') RETURNING id::text")
-		playerID := insertID(t, db, "INSERT INTO players (room_id, name, token_hash) VALUES (?, 'Ana', 'h1') RETURNING id::text", roomID)
-		matchID := insertID(t, db, "INSERT INTO matches (room_id, number, total_rounds) VALUES (?, 1, 3) RETURNING id::text", roomID)
-		themeID := insertID(t, db, "INSERT INTO themes (slug, name, kind) VALUES ('f', 'Comidas', 'words') RETURNING id::text")
-		wordID := insertID(t, db, "INSERT INTO words (theme_id, text) VALUES (?, 'Pizza') RETURNING id::text", themeID)
+		f := setup(t)
+		r := f.room()
+		ana := f.player(r.ID, "Ana")
+		foods := f.theme("f", "words")
+		pizza := f.word(foods.ID, "Pizza")
 
-		err := exec(db,
-			"INSERT INTO rounds (match_id, number, theme_id, word_id, subject_player_id) VALUES (?, 1, ?, ?, ?)",
-			matchID, themeID, wordID, playerID)
+		err := tryInsert(f.db, &storage.Round{
+			MatchID: f.match(r.ID).ID, Number: 1,
+			ThemeID: &foods.ID, WordID: &pizza.ID, SubjectPlayerID: &ana.ID,
+		})
 
 		require.Error(t, err)
 	})
 
 	t.Run("a round word must belong to the round theme", func(t *testing.T) {
-		db := newMigratedDB(t)
-		roomID := insertID(t, db, "INSERT INTO rooms (code, expires_at) VALUES ('ABCDE', now() + interval '24 hours') RETURNING id::text")
-		matchID := insertID(t, db, "INSERT INTO matches (room_id, number, total_rounds) VALUES (?, 1, 3) RETURNING id::text", roomID)
-		foodID := insertID(t, db, "INSERT INTO themes (slug, name, kind) VALUES ('f', 'Comidas', 'words') RETURNING id::text")
-		animalID := insertID(t, db, "INSERT INTO themes (slug, name, kind) VALUES ('a', 'Animais', 'words') RETURNING id::text")
-		pizzaID := insertID(t, db, "INSERT INTO words (theme_id, text) VALUES (?, 'Pizza') RETURNING id::text", foodID)
+		f := setup(t)
+		r := f.room()
+		foods := f.theme("f", "words")
+		animals := f.theme("a", "words")
+		pizza := f.word(foods.ID, "Pizza")
 
-		err := exec(db, "INSERT INTO rounds (match_id, number, theme_id, word_id) VALUES (?, 1, ?, ?)", matchID, animalID, pizzaID)
+		err := tryInsert(f.db, &storage.Round{
+			MatchID: f.match(r.ID).ID, Number: 1, ThemeID: &animals.ID, WordID: &pizza.ID,
+		})
 
 		require.Error(t, err)
 	})

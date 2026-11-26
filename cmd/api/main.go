@@ -16,6 +16,8 @@ import (
 	"github.com/vhrboliveira/impostor-game/internal/config"
 	"github.com/vhrboliveira/impostor-game/internal/httpapi"
 	"github.com/vhrboliveira/impostor-game/internal/janitor"
+	"github.com/vhrboliveira/impostor-game/internal/realtime"
+	"github.com/vhrboliveira/impostor-game/internal/room"
 	"github.com/vhrboliveira/impostor-game/internal/storage"
 )
 
@@ -44,15 +46,29 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
-	go janitor.New(storage.NewRooms(db), logger, janitor.DefaultInterval, cfg.EmptyRoomTTL).Run(ctx)
+	rooms := storage.NewRooms(db)
+	go janitor.New(rooms, logger, janitor.DefaultInterval, cfg.EmptyRoomTTL).Run(ctx)
+	roomService := room.NewService(rooms, room.Config{RoomTTL: cfg.RoomTTL})
+
+	// Cancelled first on shutdown: open WebSockets close with 1001 and clients reconnect.
+	wsShutdown, closeWebSockets := context.WithCancel(context.Background())
+	defer closeWebSockets()
+	manager := room.NewManager(rooms, logger, room.ManagerConfig{})
+	wsHandler := realtime.NewHandler(realtime.ManagerConnector{Manager: manager}, logger, cfg.AllowedOrigins, wsShutdown)
 
 	// Read and write timeouts are intentionally unset: WebSocket connections are long-lived and
 	// REST handlers bound their own work with contexts.
 	server := &http.Server{
-		Addr:              net.JoinHostPort("", cfg.Port),
-		Handler:           httpapi.NewRouter(httpapi.Deps{Logger: logger, DB: db}),
+		Addr: net.JoinHostPort("", cfg.Port),
+		Handler: httpapi.NewRouter(httpapi.Deps{
+			Logger:   logger,
+			DB:       db,
+			Rooms:    roomService,
+			Avatars:  manager,
+			Realtime: wsHandler,
+		}),
 		ReadHeaderTimeout: 5 * time.Second,
 		IdleTimeout:       2 * time.Minute,
 	}
@@ -75,8 +91,12 @@ func run() error {
 
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), shutdownTimeout)
 	defer cancel()
+	closeWebSockets()
 	if err := server.Shutdown(shutdownCtx); err != nil {
 		return fmt.Errorf("shutdown: %w", err)
+	}
+	if err := wsHandler.Wait(shutdownCtx); err != nil {
+		return fmt.Errorf("close websockets: %w", err)
 	}
 	return nil
 }

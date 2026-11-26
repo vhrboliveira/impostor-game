@@ -74,7 +74,7 @@ func decodeFile(fsys fs.FS, name string, dst any) error {
 	if err != nil {
 		return fmt.Errorf("open %s: %w", name, err)
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read-only file: a close error loses nothing
 
 	decoder := json.NewDecoder(f)
 	decoder.DisallowUnknownFields()

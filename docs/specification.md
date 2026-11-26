@@ -25,6 +25,7 @@
 
 - Qualquer pessoa cria uma sala e se torna o **anfitrião**.
 - Cada sala tem um **código** para entrada. Quem entra informa o código e o seu nome.
+- **Foto (opcional):** ao criar ou entrar na sala, o jogador pode escolher uma foto sua (câmera ou galeria). Ela aparece como miniatura em todas as telas e na revelação do impostor. A primeira foto pode ser enviada a qualquer momento; **trocar ou remover só no lobby**. A foto é apagada junto com a sala.
 - **Jogadores por sala:** mínimo de **3**, máximo de **20**.
 - **Entrada:** novos jogadores só podem entrar no **lobby** e **entre rodadas**.
 - **Retenção dos dados:** a sala é apagada **1 hora depois de ficar vazia**, ou **24 horas depois de criada**, mesmo que ainda tenha pessoas.
@@ -47,13 +48,21 @@ O **tema** não é definido na criação: é escolhido a cada rodada (ver seçã
 1. **Escolha do tema** pelo anfitrião.
 2. **Revelação do papel** em cada celular.
 3. **Perguntas em roda** (seção 8), com histórico (seção 9).
-4. **Discussão** livre, com cronômetro opcional.
+4. **Discussão** livre, com cronômetro de 3 minutos.
 5. **Votação.**
-6. **Resultado**, com palpite da palavra pelo impostor se ele for descoberto.
-7. **Placar** parcial e início da próxima rodada, até acabarem as rodadas.
+6. **Palpite** do impostor, só se ele for descoberto.
+7. **Resultado** e **placar** parcial. O anfitrião toca em **"Próxima rodada"** para começar a seguinte; depois da última rodada o botão vira **"Ver pódio"**.
 
 ### Revelação do papel
 - O papel (palavra ou "você é o impostor") aparece apenas enquanto a pessoa **mantém o botão pressionado**, para ninguém espiar.
+- Depois de ver, cada jogador toca em **"Entendi"**. As perguntas começam quando todos os jogadores **conectados** da rodada confirmarem; quem está offline não trava a rodada.
+- O anfitrião pode começar as perguntas sem esperar todo mundo.
+- Depois da revelação, até o palpite, todo jogador da rodada pode **segurar "Segure para lembrar"** para ver o papel de novo (some ao soltar). O botão é igual para todos: o impostor também o tem e vê "Você é o impostor!", para que a falta do botão não o denuncie. O servidor nunca envia a palavra ao impostor.
+
+### Discussão
+- Dura **3 minutos**. Quando o tempo acaba, a votação começa sozinha.
+- O anfitrião pode acrescentar **1 minuto** a cada toque, ou encerrar a discussão antes e começar a votação.
+- Durante a discussão, todos veem o histórico completo de perguntas da rodada.
 
 ## 6. Regras
 
@@ -62,14 +71,22 @@ O **tema** não é definido na criação: é escolhido a cada rodada (ver seçã
 - O sorteio não repete o impostor até todos terem sido, depois o ciclo recomeça.
 
 ### Votação
+- Votam os jogadores da rodada, em outro jogador da rodada. O **voto é final**: não dá para trocar.
 - Fecha quando **todos os jogadores conectados votarem** ou após **5 minutos**.
+- Até o resultado, todos veem só quem já votou, não em quem.
 - Quem não votar, ou estiver offline, conta como **abstenção**. Jogador offline não trava a votação.
 - O impostor só é **descoberto** se tiver **mais votos do que qualquer outro jogador**.
 - **Empate** (de qualquer tipo): o impostor escapa.
 
 ### Palpite do impostor
 - Se for descoberto, o impostor escolhe a palavra entre ~8 opções da categoria, com a correta entre elas. Sem texto livre.
-- No tema "Pessoas da sala", as opções são os nomes dos jogadores.
+- No tema "Pessoas da sala", as opções são os nomes dos jogadores da rodada (menos o próprio impostor).
+- Ele tem **60 segundos**. Sem escolha, conta como palpite errado.
+
+### Resultado
+- Abre com a **revelação do impostor**: um destaque passa pelas fotos dos jogadores da rodada, desacelera e para no impostor (toda vez que alguém entra no resultado; dá para pular, e com "reduzir movimento" o impostor aparece direto). Só depois aparecem os votos, que entregariam a resposta.
+- Mostra quem era o impostor, o segredo, **quem votou em quem**, o palpite (se houve) e os pontos da rodada, com o placar.
+- Novos jogadores podem entrar enquanto o resultado está na tela.
 
 ### Pontuação
 | Situação | Pontos |
@@ -96,6 +113,7 @@ O **tema** não é definido na criação: é escolhido a cada rodada (ver seçã
 
 ## 8. Perguntas e turnos
 
+- **Quem joga a rodada:** os jogadores **conectados** no momento em que o tema é escolhido (mínimo de 3). Quem estiver offline fica fora daquela rodada (não pergunta, não responde e não é impostor) e volta na seguinte.
 - **Roda:** a ordem dos jogadores é embaralhada. Cada um **pergunta ao próximo** e o último pergunta ao primeiro. Todos perguntam uma vez e respondem uma vez.
 - **Tela de todos:** mostra "quem pergunta para quem" e o texto da pergunta.
 - A pergunta é **lida em voz alta** por quem pergunta e **respondida em voz alta**.
@@ -123,9 +141,9 @@ Funcionalidade **muito importante**.
 - A partida termina depois da **última rodada definida** na criação da sala.
 - **Encerrar antes:** existe uma opção para encerrar a partida, com **botão de confirmação** para evitar acidentes (restrita ao anfitrião). O pódio mostra a pontuação até ali.
 - Não há limite nem estimativa de duração: as pessoas jogam até terminar.
-- Se os jogadores caírem **abaixo de 3** durante a partida, o anfitrião pode **encerrá-la**.
+- Se os jogadores conectados caírem **abaixo de 3** durante a partida, não dá para começar outra rodada, e o anfitrião é avisado de que pode **encerrá-la**.
 - O pódio mostra os primeiros colocados, empates dividem a posição.
-- "Jogar de novo" mantém a sala e os jogadores, e o anfitrião escolhe de novo o número de rodadas.
+- "Jogar de novo" mantém a sala e os jogadores, o anfitrião escolhe de novo o número de rodadas e a pontuação recomeça do zero.
 
 ## 11. Segurança e integridade
 

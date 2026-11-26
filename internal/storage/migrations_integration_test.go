@@ -11,7 +11,7 @@ import (
 )
 
 var appTables = []string{
-	"matches", "players", "questions", "round_scores", "rooms",
+	"matches", "player_avatars", "players", "questions", "round_scores", "rooms",
 	"rounds", "themes", "turns", "votes", "words",
 }
 

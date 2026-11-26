@@ -4,7 +4,7 @@ export
 
 GO           ?= go
 AIR_VERSION  ?= v1.61.7
-LINT_VERSION ?= v2.1.6
+LINT_VERSION ?= v2.15.0
 MIGRATE      := $(GO) run ./cmd/migrate
 GOBIN_DIR    := $(shell $(GO) env GOPATH)/bin
 

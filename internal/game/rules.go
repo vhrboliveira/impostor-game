@@ -17,8 +17,19 @@ const (
 	DefaultTurnSeconds = 180
 	// TurnExtension is added to a turn each time the answerer or the host extends it.
 	TurnExtension = time.Minute
+	// DiscussionDuration is how long the discussion lasts before the voting starts. The host can
+	// end it earlier.
+	DiscussionDuration = 3 * time.Minute
+	// DiscussionExtension is added to the discussion each time the host extends it.
+	DiscussionExtension = time.Minute
 	// VoteTimeout is how long the voting phase waits for missing votes.
 	VoteTimeout = 5 * time.Minute
+	// GuessTimeout is how long a found impostor has to guess the secret. No answer counts as a
+	// wrong guess.
+	GuessTimeout = 60 * time.Second
+	// GuessOptions is how many options the impostor picks from (the secret among them). Fewer
+	// when the theme has fewer words or the round fewer players.
+	GuessOptions = 8
 )
 
 // Points awarded at the end of a round.
