@@ -20,6 +20,12 @@ const (
 	MaxAvatarSide = 768
 
 	avatarQuality = 85
+
+	// maxJPEGScans bounds the scans of a progressive JPEG: decoding cost grows with scans times
+	// blocks, not only with the pixels checked by DecodeConfig. Encoders write about 10.
+	maxJPEGScans = 32
+	// avatarDecoders bounds how many photos the process decodes at the same time.
+	avatarDecoders = 2
 )
 
 // Avatar is a player's photo, always a JPEG. UpdatedAt changes with every new photo.
@@ -31,7 +37,8 @@ type Avatar struct {
 // NormalizeAvatar validates an uploaded photo (JPEG or PNG, at most MaxAvatarSide on each side
 // and MaxAvatarBytes) and re-encodes it as a JPEG. Re-encoding drops every metadata segment (EXIF
 // can carry the GPS position where the photo was taken) and anything hidden after the image data.
-// The dimensions are checked before decoding, so a small file cannot claim a huge image.
+// The dimensions and, for a JPEG, the number of scans are checked before decoding, so a small file
+// can neither claim a huge image nor make decoding arbitrarily expensive.
 func NormalizeAvatar(data []byte) ([]byte, error) {
 	if len(data) == 0 || len(data) > MaxAvatarBytes {
 		return nil, ErrInvalidAvatar
@@ -42,6 +49,11 @@ func NormalizeAvatar(data []byte) ([]byte, error) {
 		return nil, ErrInvalidAvatar
 	}
 	if cfg.Width < 1 || cfg.Height < 1 || cfg.Width > MaxAvatarSide || cfg.Height > MaxAvatarSide {
+		return nil, ErrInvalidAvatar
+	}
+	// A 0xFF byte inside entropy-coded data is always stuffed as FF 00, so counting the SOS marker
+	// (FF DA) can only over-count: safe for a limit.
+	if format == "jpeg" && bytes.Count(data, []byte{0xFF, 0xDA}) > maxJPEGScans {
 		return nil, ErrInvalidAvatar
 	}
 

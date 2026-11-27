@@ -42,6 +42,10 @@ func run() error {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
+	if cfg.IsProd() && cfg.InsecureDatabaseTLS() {
+		logger.Warn("DATABASE_URL does not verify the database certificate: use sslmode=verify-full in production")
+	}
+
 	db, err := storage.Open(ctx, cfg.DatabaseURL, logger)
 	if err != nil {
 		return err
@@ -49,6 +53,11 @@ func run() error {
 	defer func() { _ = db.Close() }()
 
 	rooms := storage.NewRooms(db)
+	// Before the janitor and the server start: rooms the previous process left marked occupied
+	// start their empty-room TTL now.
+	if err := rooms.MarkAllEmpty(ctx, time.Now()); err != nil {
+		return err
+	}
 	go janitor.New(rooms, logger, janitor.DefaultInterval, cfg.EmptyRoomTTL).Run(ctx)
 	roomService := room.NewService(rooms, room.Config{RoomTTL: cfg.RoomTTL})
 
@@ -58,20 +67,14 @@ func run() error {
 	manager := room.NewManager(rooms, logger, room.ManagerConfig{})
 	wsHandler := realtime.NewHandler(realtime.ManagerConnector{Manager: manager}, logger, cfg.AllowedOrigins, wsShutdown)
 
-	// Read and write timeouts are intentionally unset: WebSocket connections are long-lived and
-	// REST handlers bound their own work with contexts.
-	server := &http.Server{
-		Addr: net.JoinHostPort("", cfg.Port),
-		Handler: httpapi.NewRouter(httpapi.Deps{
-			Logger:   logger,
-			DB:       db,
-			Rooms:    roomService,
-			Avatars:  manager,
-			Realtime: wsHandler,
-		}),
-		ReadHeaderTimeout: 5 * time.Second,
-		IdleTimeout:       2 * time.Minute,
-	}
+	server := newHTTPServer(net.JoinHostPort("", cfg.Port), httpapi.NewRouter(httpapi.Deps{
+		Logger:         logger,
+		DB:             db,
+		Rooms:          roomService,
+		Avatars:        manager,
+		Realtime:       wsHandler,
+		TrustedProxies: cfg.TrustedProxies,
+	}), defaultServerTimeouts)
 
 	serverErr := make(chan error, 1)
 	go func() {

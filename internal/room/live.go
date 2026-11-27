@@ -49,7 +49,13 @@ type PlayerState struct {
 	Score    int
 	// AvatarAt is when the player's photo was last set, nil without a photo.
 	AvatarAt *time.Time
+	// LeftAt is when the player left or was removed. They stay in the state so the names in the
+	// round's turns and votes still resolve, but they hold no seat and never play again.
+	LeftAt *time.Time
 }
+
+// Active reports whether the player is still in the room.
+func (p PlayerState) Active() bool { return p.LeftAt == nil }
 
 // MatchState is the latest match of the room.
 type MatchState struct {
@@ -225,9 +231,9 @@ type StartedMatch struct {
 // concurrent use; each method is atomic.
 type LiveStore interface {
 	// Authenticate returns the id of the player of the room whose session token hashes to
-	// tokenHash. It returns ErrRoomNotFound when the room does not exist or expired, and
-	// ErrUnauthorized when no player of the room has that token.
-	Authenticate(ctx context.Context, code, tokenHash string, now time.Time) (playerID string, err error)
+	// tokenHash, and the id of that room. It returns ErrRoomNotFound when the room does not exist
+	// or expired, and ErrUnauthorized when no player of the room has that token.
+	Authenticate(ctx context.Context, code, tokenHash string, now time.Time) (playerID, roomID string, err error)
 
 	// LoadRoom reads everything an actor needs. It returns ErrRoomNotFound when the room does
 	// not exist or expired.
@@ -237,12 +243,20 @@ type LiveStore interface {
 	// call it when a player who joined over REST connects for the first time.
 	LoadPlayers(ctx context.Context, roomID, matchID string) ([]PlayerState, error)
 
+	// MarkConnected records the first time a player opened the room (later calls change
+	// nothing): only such players, or players who joined a moment ago, hold a seat.
+	MarkConnected(ctx context.Context, playerID string, at time.Time) error
+
 	// SetEmptySince records that the room became empty (since is non-nil) or that someone is
-	// connected again (since is nil).
+	// connected again (since is nil). It returns ErrRoomNotFound when the room no longer exists.
 	SetEmptySince(ctx context.Context, roomID string, since *time.Time) error
 
 	// TransferHost makes playerID the only host of the room.
 	TransferHost(ctx context.Context, roomID, playerID string) error
+
+	// RemovePlayer marks the player as gone (left_at) and, when newHostID is not empty, makes that
+	// player the host, in one transaction.
+	RemovePlayer(ctx context.Context, roomID, playerID, newHostID string, at time.Time) error
 
 	// StartMatch sets the match in progress and creates its first round in theme selection.
 	StartMatch(ctx context.Context, params StartMatchParams) (StartedMatch, error)
@@ -272,8 +286,9 @@ type LiveStore interface {
 	// CastVote records a vote. Votes are final.
 	CastVote(ctx context.Context, roundID, voterID, targetID string, now time.Time) error
 
-	// LoadThemeWords returns every word of a theme, for the impostor's guess options.
-	LoadThemeWords(ctx context.Context, themeID int64) ([]Word, error)
+	// LoadGuessWords returns the words of a theme that no round of the room other than roundID
+	// used: the set the secret was drawn from, for the impostor's guess options.
+	LoadGuessWords(ctx context.Context, roomID string, themeID int64, roundID string) ([]Word, error)
 
 	// StartGuess closes the voting with the impostor found and moves to the guess.
 	StartGuess(ctx context.Context, params StartGuessParams) error

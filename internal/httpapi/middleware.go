@@ -118,7 +118,7 @@ func isHealthPath(path string) bool {
 
 // accessLog logs one line per request. Health probes are logged at debug level to keep the
 // output readable.
-func accessLog(logger *slog.Logger) Middleware {
+func accessLog(logger *slog.Logger, addr clientAddress) Middleware {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
@@ -149,6 +149,7 @@ func accessLog(logger *slog.Logger) Middleware {
 				slog.Duration("duration", time.Since(start)),
 				slog.String("request_id", RequestIDFromContext(r.Context())),
 				slog.String("remote_addr", r.RemoteAddr),
+				slog.String("client", addr.of(r)),
 			)
 		})
 	}

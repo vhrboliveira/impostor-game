@@ -9,12 +9,19 @@ import (
 	"time"
 )
 
-// DefaultInterval is how often the janitor looks for expired rooms.
-const DefaultInterval = time.Minute
+const (
+	// DefaultInterval is how often the janitor looks for expired rooms.
+	DefaultInterval = time.Minute
+	// DefaultBatchSize bounds the rooms deleted by one statement, so a large cleanup does not hold
+	// row locks (and the cascades) for the whole set at once.
+	DefaultBatchSize = 500
+	// defaultRunTimeout bounds one cleanup run, so a hung database does not stall it forever.
+	defaultRunTimeout = 30 * time.Second
+)
 
-// Store deletes expired rooms. storage.Rooms implements it.
+// Store deletes expired rooms, at most limit per call. storage.Rooms implements it.
 type Store interface {
-	DeleteExpired(ctx context.Context, now time.Time, emptyTTL time.Duration) (int64, error)
+	DeleteExpired(ctx context.Context, now time.Time, emptyTTL time.Duration, limit int) (int64, error)
 }
 
 // Janitor runs the cleanup on a fixed interval.
@@ -24,27 +31,45 @@ type Janitor struct {
 	interval time.Duration
 	emptyTTL time.Duration
 	now      func() time.Time
+	// runTimeout bounds one RunOnce.
+	runTimeout time.Duration
 }
 
 // New creates a Janitor. emptyTTL is how long a room may stay empty before being deleted.
 func New(store Store, logger *slog.Logger, interval, emptyTTL time.Duration) *Janitor {
 	return &Janitor{
-		store:    store,
-		logger:   logger,
-		interval: interval,
-		emptyTTL: emptyTTL,
-		now:      time.Now,
+		store:      store,
+		logger:     logger,
+		interval:   interval,
+		emptyTTL:   emptyTTL,
+		now:        time.Now,
+		runTimeout: defaultRunTimeout,
 	}
 }
 
-// RunOnce deletes the expired rooms right now.
+// RunOnce deletes the expired rooms right now, in batches of DefaultBatchSize until a batch comes
+// back short, within runTimeout.
 func (j *Janitor) RunOnce(ctx context.Context) error {
-	deleted, err := j.store.DeleteExpired(ctx, j.now(), j.emptyTTL)
-	if err != nil {
-		return fmt.Errorf("delete expired rooms: %w", err)
+	ctx, cancel := context.WithTimeout(ctx, j.runTimeout)
+	defer cancel()
+
+	now := j.now()
+	var total int64
+	for {
+		deleted, err := j.store.DeleteExpired(ctx, now, j.emptyTTL, DefaultBatchSize)
+		total += deleted
+		if err != nil {
+			if total > 0 {
+				j.logger.Info("expired rooms deleted", slog.Int64("count", total))
+			}
+			return fmt.Errorf("delete expired rooms: %w", err)
+		}
+		if deleted < DefaultBatchSize {
+			break
+		}
 	}
-	if deleted > 0 {
-		j.logger.Info("expired rooms deleted", slog.Int64("count", deleted))
+	if total > 0 {
+		j.logger.Info("expired rooms deleted", slog.Int64("count", total))
 	}
 	return nil
 }

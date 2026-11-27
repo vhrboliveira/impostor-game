@@ -106,13 +106,17 @@ curl -i localhost:8080/healthz   # liveness
 curl -i localhost:8080/readyz    # readiness (checks the database)
 
 # Create a room (the creator is the host) and join it with its code:
-curl -s -X POST localhost:8080/api/room -d '{"playerName":"Ana","totalRounds":5}'
+curl -s -X POST localhost:8080/api/room -H 'Content-Type: application/json' \
+  -d '{"playerName":"Ana","totalRounds":5}'
 # {"roomCode":"K7M2P","playerId":"…","token":"…"}
-curl -s -X POST localhost:8080/api/room/K7M2P/join -d '{"playerName":"Bia"}'
+curl -s -X POST localhost:8080/api/room/K7M2P/join -H 'Content-Type: application/json' \
+  -d '{"playerName":"Bia"}'
 ```
 
 Both return `201` with a session token; errors are `{"code":"room_not_found"}` style
-(see [docs/protocol.md](docs/protocol.md)). A player can then send an optional photo with that
+(see [docs/protocol.md](docs/protocol.md)). The JSON endpoints require
+`Content-Type: application/json` and are rate-limited per client (`429 rate_limited`; the limits
+are in the protocol). A player can then send an optional photo with that
 token:
 
 ```bash
@@ -120,7 +124,9 @@ curl -s -X PUT localhost:8080/api/room/K7M2P/me/avatar \
   -H "Authorization: Bearer $TOKEN" -H 'Content-Type: image/jpeg' --data-binary @me.jpg
 ```
 
-With `LOG_LEVEL=debug` every SQL query is logged.
+With `LOG_LEVEL=debug` every SQL query is logged with its values (photos, token hashes, who the
+impostor is), so it is only allowed with `APP_ENV=dev`. A variable set in the shell wins over
+`.env` in make targets (`LOG_LEVEL=info make run`).
 
 The web app's dev server (`pnpm dev`, port 5173) proxies `/api` and `/ws` to
 `http://localhost:8080`, so run both and open `http://localhost:5173`. Open it in three browser
@@ -208,6 +214,19 @@ The image contains `api`, `migrate` and `seed`. Change the entrypoint to run the
 Inside a container `localhost` is the container itself, so a `DATABASE_URL` pointing at
 `localhost:5436` will not reach the Compose database. Use `host.docker.internal:5436`
 (Docker Desktop), or run the container on the Compose network.
+
+The base images are pinned by digest in the `Dockerfile`: when bumping a tag, update its digest
+too (`docker buildx imagetools inspect <image:tag>`).
+
+### Production checklist
+
+- `APP_ENV=prod` (it refuses `LOG_LEVEL=debug`), `ALLOWED_ORIGINS` with only the production
+  origin, and `DATABASE_URL` with `sslmode=verify-full` (anything else logs a warning).
+- Behind a reverse proxy, set `TRUSTED_PROXIES` (its IPs or CIDRs) so the rate limits see the
+  real client in `X-Forwarded-For`, and make the proxy append that header. Without it every
+  client looks like the proxy and shares one budget.
+- The proxy must not log the query string of `/ws/`: the session token travels there.
+- Terminate TLS at the proxy (with HSTS) and keep `/readyz` internal.
 
 ## Troubleshooting
 

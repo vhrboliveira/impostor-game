@@ -23,8 +23,8 @@ var _ room.LiveStore = (*Rooms)(nil)
 // writer of a live room).
 var errUnexpectedRows = errors.New("the row is not in the expected state")
 
-// Authenticate returns the player of the room whose token hashes to tokenHash.
-func (r *Rooms) Authenticate(ctx context.Context, code, tokenHash string, now time.Time) (string, error) {
+// Authenticate returns the player of the room whose token hashes to tokenHash, and the room id.
+func (r *Rooms) Authenticate(ctx context.Context, code, tokenHash string, now time.Time) (string, string, error) {
 	var found Room
 	err := r.db.NewSelect().Model(&found).
 		Column("id").
@@ -32,10 +32,10 @@ func (r *Rooms) Authenticate(ctx context.Context, code, tokenHash string, now ti
 		Where("expires_at > ?", now).
 		Scan(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", room.ErrRoomNotFound
+		return "", "", room.ErrRoomNotFound
 	}
 	if err != nil {
-		return "", fmt.Errorf("read room: %w", err)
+		return "", "", fmt.Errorf("read room: %w", err)
 	}
 
 	var player Player
@@ -43,14 +43,15 @@ func (r *Rooms) Authenticate(ctx context.Context, code, tokenHash string, now ti
 		Column("id").
 		Where("room_id = ?", found.ID).
 		Where("token_hash = ?", tokenHash).
+		Where("left_at IS NULL").
 		Scan(ctx)
 	if errors.Is(err, sql.ErrNoRows) {
-		return "", room.ErrUnauthorized
+		return "", "", room.ErrUnauthorized
 	}
 	if err != nil {
-		return "", fmt.Errorf("authenticate player: %w", err)
+		return "", "", fmt.Errorf("authenticate player: %w", err)
 	}
-	return player.ID, nil
+	return player.ID, found.ID, nil
 }
 
 // LoadRoom reads the room, its latest match and round (with its theme, secret, impostor and turn
@@ -113,13 +114,32 @@ func (r *Rooms) LoadPlayers(ctx context.Context, roomID, matchID string) ([]room
 	return loadPlayers(ctx, r.db, roomID, matchID)
 }
 
-// SetEmptySince sets (since non-nil) or clears (since nil) rooms.empty_since.
+// SetEmptySince sets (since non-nil) or clears (since nil) rooms.empty_since. It returns
+// room.ErrRoomNotFound when the room no longer exists (the janitor deleted it).
 func (r *Rooms) SetEmptySince(ctx context.Context, roomID string, since *time.Time) error {
-	if _, err := r.db.NewUpdate().Model((*Room)(nil)).
+	res, err := r.db.NewUpdate().Model((*Room)(nil)).
 		Set("empty_since = ?", since).
 		Where("id = ?", roomID).
-		Exec(ctx); err != nil {
+		Exec(ctx)
+	if err != nil {
 		return fmt.Errorf("update empty_since: %w", err)
+	}
+	if n, err := res.RowsAffected(); err != nil {
+		return fmt.Errorf("update empty_since: %w", err)
+	} else if n == 0 {
+		return room.ErrRoomNotFound
+	}
+	return nil
+}
+
+// MarkConnected records the first time the player opened the room. Later calls change nothing.
+func (r *Rooms) MarkConnected(ctx context.Context, playerID string, at time.Time) error {
+	if _, err := r.db.NewUpdate().Model((*Player)(nil)).
+		Set("connected_at = ?", at).
+		Where("id = ?", playerID).
+		Where("connected_at IS NULL").
+		Exec(ctx); err != nil {
+		return fmt.Errorf("mark player connected: %w", err)
 	}
 	return nil
 }
@@ -141,6 +161,33 @@ func (r *Rooms) TransferHost(ctx context.Context, roomID, playerID string) error
 			Set("is_host = true").
 			Where("room_id = ?", roomID).
 			Where("id = ?", playerID).
+			Exec(ctx)
+		return expectOneRow(res, err, "set host")
+	})
+}
+
+// RemovePlayer marks the player as gone from the room (left_at), never deleting them, and hands
+// the host role to newHostID when given, in one transaction.
+func (r *Rooms) RemovePlayer(ctx context.Context, roomID, playerID, newHostID string, at time.Time) error {
+	return r.db.RunInTx(ctx, nil, func(ctx context.Context, tx bun.Tx) error {
+		res, err := tx.NewUpdate().Model((*Player)(nil)).
+			Set("left_at = ?", at).
+			Set("is_host = false").
+			Where("room_id = ?", roomID).
+			Where("id = ?", playerID).
+			Where("left_at IS NULL").
+			Exec(ctx)
+		if err := expectOneRow(res, err, "remove player"); err != nil {
+			return err
+		}
+		if newHostID == "" {
+			return nil
+		}
+		res, err = tx.NewUpdate().Model((*Player)(nil)).
+			Set("is_host = true").
+			Where("room_id = ?", roomID).
+			Where("id = ?", newHostID).
+			Where("left_at IS NULL").
 			Exec(ctx)
 		return expectOneRow(res, err, "set host")
 	})
@@ -376,17 +423,34 @@ func (r *Rooms) StartVoting(ctx context.Context, roundID string, deadline time.T
 // CastVote records a vote. The primary key (round, voter) makes votes final.
 func (r *Rooms) CastVote(ctx context.Context, roundID, voterID, targetID string, now time.Time) error {
 	vote := &Vote{RoundID: roundID, VoterID: voterID, TargetID: &targetID, CastAt: now}
-	if _, err := r.db.NewInsert().Model(vote).Exec(ctx); err != nil {
+	if _, err := r.db.NewInsert().Model(vote).
+		On("CONFLICT (round_id, voter_id) DO UPDATE").
+		Set("target_id = EXCLUDED.target_id").
+		Set("cast_at = EXCLUDED.cast_at").
+		Exec(ctx); err != nil {
 		return fmt.Errorf("cast vote: %w", err)
 	}
 	return nil
 }
 
-// LoadThemeWords returns every word of a theme, ordered by id.
-func (r *Rooms) LoadThemeWords(ctx context.Context, themeID int64) ([]room.Word, error) {
+// LoadGuessWords returns the words of a theme that no round of the room other than roundID used,
+// ordered by id: the same eligibility set the round's secret was drawn from, so no guess option
+// can be ruled out from an earlier result.
+func (r *Rooms) LoadGuessWords(ctx context.Context, roomID string, themeID int64, roundID string) ([]room.Word, error) {
+	usedElsewhere := r.db.NewSelect().Model((*Round)(nil)).
+		ColumnExpr("1").
+		Join("JOIN matches AS m ON m.id = rd.match_id").
+		Where("m.room_id = ?", roomID).
+		Where("rd.word_id = w.id").
+		Where("rd.id <> ?", roundID)
+
 	var rows []Word
-	if err := r.db.NewSelect().Model(&rows).Where("theme_id = ?", themeID).Order("id").Scan(ctx); err != nil {
-		return nil, fmt.Errorf("read theme words: %w", err)
+	if err := r.db.NewSelect().Model(&rows).
+		Where("w.theme_id = ?", themeID).
+		Where("NOT EXISTS (?)", usedElsewhere).
+		Order("w.id").
+		Scan(ctx); err != nil {
+		return nil, fmt.Errorf("read guess words: %w", err)
 	}
 	words := make([]room.Word, 0, len(rows))
 	for _, w := range rows {
@@ -565,6 +629,7 @@ func loadPlayers(ctx context.Context, db bun.IDB, roomID, matchID string) ([]roo
 			JoinedAt: row.JoinedAt,
 			Score:    row.Score,
 			AvatarAt: row.AvatarAt,
+			LeftAt:   row.LeftAt,
 		})
 	}
 	return players, nil

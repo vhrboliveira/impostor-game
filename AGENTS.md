@@ -53,7 +53,7 @@ Done (database review): every query of the repositories, the seed and the integr
 uses the bun models (`internal/storage/models.go`) and the query builder; SQL text is left only
 in the migrations.
 
-Done (slice 4, voting, result and end of the match): final votes with the 5-minute deadline,
+Done (slice 4, voting, result and end of the match): votes with the 5-minute deadline,
 counting and scoring (`game.CountVotes`, `game.ScoreRound`), the impostor's guess in its own
 phase (`guess`, 60 seconds, up to 8 options), the result with every vote and the points, the
 host's "Próxima rodada" / "Ver pódio", `end_match`, and "play again" (`internal/room/voting.go`;
@@ -67,9 +67,25 @@ and applied by the room actor (`internal/room/avatar.go`, `avatar_actor.go`,
 `internal/httpapi/avatars.go`, `internal/storage/avatars.go`). The web app shows it as the
 thumbnail and in the impostor's reveal.
 
-Next step: slice 5, robustness: rate limits on creating and joining rooms, production origin
-and CORS, observability and deployment. Real content (themes, words, questions) is still to be
-written.
+Done (security hardening, first part of slice 5; from the audit of 2026-11-26): per-client rate
+limits with a budget of failed lookups against guessing room codes (`internal/httpapi/ratelimit.go`,
+`TRUSTED_PROXIES`), one answer (`401`/`4401`) for an unknown room and a wrong token on the token
+endpoints, HTTP read/write timeouts (`cmd/api/server.go`), WebSocket message rate, connection cap
+and coalesced snapshots, a `recover` per room actor, rounds frozen once their match ends, `Votes`
+allocated for a reloaded voting, timer retries, `empty_since` reconciled at startup, the photo
+authenticated before decoding with a cap on JPEG scans, guess options only for the impostor, decoys
+from unused words, a weighted impostor/subject draw, seats held only by players who connected,
+NFC names without invisible characters, `no-store`/`nosniff` and `application/json` on the REST
+API, debug logs refused in prod, CI with read-only permissions, pinned actions and images, and
+`govulncheck`.
+
+Done (leaving and vote changes): `leave_room`, `remove_player` and removal after 3 minutes offline
+(`internal/room/leave.go`, `players.left_at`, close code `4403`); votes confirmed with a button and
+changeable while the voting is open (`CastVote` upserts).
+
+Next step: the rest of slice 5: production origin and CORS, observability and deployment (TLS,
+reverse proxy, hosting headers of the web app). Real content (themes, words, questions) is still
+to be written.
 
 ## Game rules (decided)
 
@@ -90,12 +106,25 @@ written.
 - If the host leaves or goes offline, the oldest connected player (by join time) becomes the
   host after a 30-second grace period (phones drop the socket whenever the app goes to the
   background). The old host does not get the role back when they return.
-- Player names: 1 to 20 printable characters, inner whitespace collapsed, first letter
-  upper-cased ("ana" becomes "Ana", so they collide). The rest stays as typed, so "ANA" and
-  "Ana" are different. Duplicated names get a number appended ("Ana 2").
+- Player names: 1 to 20 printable characters, inner whitespace collapsed, composed to Unicode
+  NFC (one spelling per name), without invisible or blank characters (default-ignorable code
+  points such as the Hangul fillers, the blank braille pattern) or more than two combining marks
+  on a character, first letter upper-cased ("ana" becomes "Ana", so they collide). The rest stays
+  as typed, so "ANA" and "Ana" are different. Duplicated names get a number appended ("Ana 2").
+- A seat (against the 20) is held by a player who opened the room's WebSocket at least once, or
+  who joined less than 2 minutes ago (`game.SeatHoldTime`, `players.connected_at`): joins that
+  never open the room cannot keep it full.
   Players reconnect to the same seat with a session token kept on the device (important on
   iOS, which suspends sockets in the background).
 - Room code: short (5 characters), no ambiguous letters (O/0, I/1), collision-checked.
+- Leaving: a player leaves with "Sair da sala", the host removes someone in the lobby, and a
+  player offline for 3 minutes (`room.DefaultOfflineRemoval`) is removed; the app asks for a
+  confirmation before leaving or removing. The player is marked (`players.left_at`), never
+  deleted (deleting cascades to their rounds): they keep resolving the names of the round
+  (`hasLeft` in the snapshot), lose their seat, name and token, and drop out of the scoreboard
+  and the podium. Their connections close with `4403`. A host who leaves hands the role to the
+  oldest connected player at once. The offline countdown lives in the room actor: when a room
+  loads, every player away gets the full 3 minutes.
 - Optional player photo (camera or gallery), shown as the thumbnail and revealed with the
   impostor in the result. A player without a photo can send one at any moment (right after
   joining, also between rounds); changing or removing it only in the lobby. The server accepts
@@ -105,8 +134,8 @@ written.
 
 1. **Theme**: the host picks the theme at the start of each round from the catalog
    (no preset list; themes can repeat). A "Sorteio" option picks a random theme.
-   A theme that cannot feed the round (no word left unused in the room, or fewer questions
-   than players) is refused (`theme_unavailable`); "Sorteio" tries the next theme.
+   A theme that cannot feed the round (fewer than 4 words left unused in the room, or fewer
+   questions than players) is refused (`theme_unavailable`); "Sorteio" tries the next theme.
 2. **Reveal**: each player holds a button to see their role (the secret word, or "you are
    the impostor"). Holding avoids neighbors peeking. Each player taps "Entendi"; the questions
    start when every **connected** player of the round confirmed (offline players never hold
@@ -152,7 +181,9 @@ written.
 
 ### Voting and scoring
 
-- Only the players of the round vote, for another player of the round. Votes are final.
+- Only the players of the round vote, for another player of the round, confirming the choice
+  with a button. A player can change their vote (confirming again) while the voting is open; it
+  closes as soon as every connected player voted, so the last vote ends the changes.
 - Voting closes when all connected players of the round voted or after 5 minutes. Players who
   did not vote, or are offline, count as abstentions (recorded with a null target) and never
   block the round. Until the result only who already voted is public, not for whom.
@@ -164,11 +195,16 @@ written.
 
 ### Rotation and uniqueness
 
-- The impostor does not repeat until everyone has been the impostor; then the cycle restarts.
+- Every player of the round can always be drawn as the impostor; players picked less often in
+  the match weigh more (`game.PickImpostor`). Results are public, so excluding earlier impostors
+  (the old no-repeat cycle) let the players deduce the impostor at the end of each cycle.
 - The same word does not repeat within a room.
 - "Players" theme: the impostor is drawn first and can never be the subject; every player is
-  eligible (the host cannot exclude anyone) and the same person only comes back after all were
-  picked.
+  eligible (the host cannot exclude anyone), weighted toward who was picked less, so the impostor
+  cannot deduce the subject from earlier results.
+- A words theme feeds a round only with at least 4 unused words in the room
+  (`game.MinGuessWords`): the impostor's guess options come from those same unused words, never
+  from earlier secrets. The guess options are sent only to the impostor.
 
 ### Content
 
@@ -195,13 +231,25 @@ written.
 - Go standard library first. The only non-standard dependencies: `uptrace/bun` (ORM and
   migrator, with `pgdialect` and `pgdriver`), `coder/websocket` (the standard library has no
   WebSocket; used from the WebSocket step), `stretchr/testify` (tests) and, when needed,
-  `golang.org/x/time/rate` (rate limiting). Adding any other dependency needs a reason in the
+  `golang.org/x/time/rate` (rate limiting) and `golang.org/x/text/unicode/norm` (NFC of player
+  names; it was already in the module graph). Adding any other dependency needs a reason in the
   change description. IDs are generated by PostgreSQL (`gen_random_uuid()`), no UUID library.
 - Routing with `net/http` `ServeMux` patterns (`POST /api/room/{code}/join`), logging with
   `log/slog`, configuration only from environment variables (`internal/config`). Middleware:
   request id, access log and panic recovery; the status recorder forwards `Hijack` and `Flush`
   and exposes `Unwrap`, so WebSocket upgrades work through it. `LOG_LEVEL=debug` logs every SQL
-  query (`db = db.WithQueryHook(...)`: bun returns a new `*bun.DB`, so reassign it).
+  query with its values (`db = db.WithQueryHook(...)`: bun returns a new `*bun.DB`, so reassign
+  it), so it is refused with `APP_ENV=prod`. In prod a `DATABASE_URL` without
+  `sslmode=verify-full` logs a warning at startup.
+- HTTP server (`cmd/api/server.go`): 5 s to read the headers, 30 s for the request and 30 s for
+  the response, 2 min idle. Hijacked WebSockets are not affected (net/http clears the deadlines).
+- Rate limits (`internal/httpapi/ratelimit.go`, `golang.org/x/time/rate`): per client address
+  (`RemoteAddr`, or `X-Forwarded-For` only from `TRUSTED_PROXIES`; IPv6 by /64), a budget for
+  creating rooms, one for every join/photo/WebSocket request, and a small one for failed lookups
+  (`404`/`401`) of join and the photo endpoints. Values in `docs/protocol.md`. Token endpoints
+  answer `401`/`4401` alike for an unknown room and a wrong token, so only join (with the miss
+  budget) tells whether a room exists. JSON `POST` bodies must be `application/json`; JSON
+  responses carry `Cache-Control: no-store` and `nosniff`.
 - PostgreSQL 17 or newer; `storage.Open` refuses older servers (`storage.MinServerVersion`).
   Local dev and the CI both use `postgres:17-alpine`, published on host port **5436** (5432
   inside the container) to avoid clashing with a local PostgreSQL. `.env.example`, the
@@ -219,12 +267,16 @@ written.
   origins such as `http://localhost:5173`), else `403` before the upgrade. The token travels in
   the query string (browsers cannot set headers on the handshake); it is never logged (the
   access log has only the path). Messages are at most 4 KiB. A connection silent for 60 s is
-  closed (the web app pings every 25 s). Close codes: 4401 and 4404 are final; 1001 (shutdown)
+  closed (the web app pings every 25 s). A connection may send 10 messages per second (burst 30),
+  else 1008. Close codes: 4401 and 4404 are final; 1001 (shutdown), 1008, 1011
   and 1013 (connection too slow) mean "reconnect".
-- Room actors (`room.Manager`): created on the first connection by loading the room from the
+- Room actors (`room.Manager`): a panic in a command or timer is recovered and stops only that
+  room (connections closed with 1011). Created on the first connection by loading the room from the
   database, stopped after 2 minutes without connections, and stopped with every connection
   closed with 4404 when the room reaches `expires_at`. An actor never blocks on a client: each
-  connection has a 32-message buffer and is closed when it fills up.
+  connection keeps only its newest unsent snapshot (snapshots are full state) and a 32-message
+  buffer for the rest, closed (1013) when that fills up; a player holds at most 4 connections (a
+  new one closes the oldest with 1008).
 - Linting: golangci-lint v2.15.0 (`LINT_VERSION` in the Makefile and the CI). Older builds cannot
   read Go 1.27 export data.
 - Migrations: plain SQL files embedded in the binary and run by bun's migrator
@@ -317,22 +369,23 @@ on small interfaces it defines itself; `storage` implements those interfaces. `g
 - Uploaded photos are untrusted: bounded body, dimensions checked before decoding, always
   re-encoded (no metadata, nothing appended survives), served as `image/jpeg` with `nosniff`.
 - Validate every message and every REST body. Check the WebSocket `Origin` against
-  `ALLOWED_ORIGINS`. Apply rate limits to creating and joining rooms.
+  `ALLOWED_ORIGINS`. Apply rate limits to creating and joining rooms (and to anything that takes a
+  room code or a token), and never tell a caller without a valid token whether a room exists.
+- Bound every unit of work an untrusted request can start: body size and read time, decoding cost
+  (the JPEG scan cap), concurrency, connections per player, messages per connection.
+- The impostor and the subject must not be deducible from public results (weighted draws), and
+  guess options go only to the impostor.
 - The integration-test helper wipes the schema of `TEST_DATABASE_URL`; it refuses names that
   do not end in `_test`.
 
 ## Open items
 
-- Leaving a room: not defined yet. Note that the foreign keys to `players` cascade (migration
-  `cascade_player_fkeys`), so deleting a player would delete the rounds in which they were the
-  impostor or the subject; a "leave" should mark the player instead of deleting them.
 - `players.last_seen_at` is set on joining and never updated (presence lives in the actor).
 - Reveal confirmations ("Entendi") live in the actor's memory: if the room is reloaded during a
   reveal, players confirm again.
 - Real content: themes, words and 50 to 100 questions (`make seed ARGS=-release` enforces the
   minimums; see `cmd/seed`).
-- Rate limiting, production deployment, observability.
+- Production deployment, observability. The reverse proxy must not log the query string of
+  `/ws/` (the token travels there) and must set `X-Forwarded-For` (with `TRUSTED_PROXIES`).
 - CORS in production: undecided; it depends on whether the web app is served from another origin
   than the API.
-- `go.mod` pins `golang.org/x/crypto` (indirect) to a pseudo-version (untagged commit), probably
-  from a `go get -u`: move it to a tagged release.

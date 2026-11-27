@@ -253,3 +253,65 @@ func TestClient_SlowConnectionAsksToClose(t *testing.T) {
 
 	c.Close(protocol.CloseRoomNotFound, "again") // later closes are ignored and never block
 }
+
+// Snapshots carry the whole room state, so a newer one replaces an unsent older one: a burst of
+// room changes (another player's commands or reconnects) never fills a healthy connection's
+// buffer and gets it closed.
+func TestClient_SnapshotsReplaceEachOther(t *testing.T) {
+	c := newClient()
+	for i := range outboundBuffer * 3 {
+		c.Send(protocol.SnapshotMessage(protocol.RoomSnapshot{RoomCode: "K7M2P", Players: []protocol.PlayerView{}, Me: protocol.MeView{}, Match: protocol.MatchView{RoundNumber: i}}))
+	}
+
+	select {
+	case frame := <-c.closeReq:
+		t.Fatalf("snapshots must not close the connection, got %d", frame.code)
+	default:
+	}
+	msg, ok := c.takeSnapshot()
+	require.True(t, ok)
+	assert.Equal(t, outboundBuffer*3-1, msg.Payload.(protocol.RoomSnapshot).Match.RoundNumber, "only the newest is kept")
+	_, ok = c.takeSnapshot()
+	assert.False(t, ok)
+}
+
+// One connection cannot flood the room with commands: past a burst the server closes it with
+// 1008 (policy violation).
+func TestHandler_LimitsTheMessageRate(t *testing.T) {
+	ts := newTestServer(t)
+	conn, _, err := dial(t, ts.url+"/ws/room/K7M2P?token=good", testOrigin)
+	require.NoError(t, err)
+	readMessage(t, conn) // the snapshot
+
+	for range messageBurst * 3 {
+		if conn.Write(t.Context(), websocket.MessageText, []byte(`{"type":"confirm_reveal"}`)) != nil {
+			break
+		}
+	}
+
+	assert.Equal(t, websocket.StatusPolicyViolation, readCloseStatus(t, conn))
+	assert.Less(t, len(ts.rooms.handledMessages()), messageBurst*3)
+}
+
+// blockingRooms never answers Connect before its context ends.
+type blockingRooms struct{}
+
+func (blockingRooms) Connect(ctx context.Context, _, _ string, _ room.Client) (Session, error) {
+	<-ctx.Done()
+	return nil, ctx.Err()
+}
+
+// The handshake's authentication and room load have a deadline: after the upgrade, net/http no
+// longer cancels the request context when the client goes away.
+func TestHandler_ConnectHasADeadline(t *testing.T) {
+	handler := NewHandler(blockingRooms{}, slog.New(slog.NewTextHandler(io.Discard, nil)), []string{testOrigin}, t.Context())
+	handler.connectTimeout = 50 * time.Millisecond
+	mux := http.NewServeMux()
+	mux.Handle("GET /ws/room/{code}", handler)
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	conn, _, err := dial(t, "ws"+strings.TrimPrefix(server.URL, "http")+"/ws/room/K7M2P?token=good", testOrigin)
+	require.NoError(t, err)
+	assert.Equal(t, websocket.StatusInternalError, readCloseStatus(t, conn))
+}

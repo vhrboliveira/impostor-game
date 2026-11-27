@@ -26,12 +26,13 @@
 - Qualquer pessoa cria uma sala e se torna o **anfitrião**.
 - Cada sala tem um **código** para entrada. Quem entra informa o código e o seu nome.
 - **Foto (opcional):** ao criar ou entrar na sala, o jogador pode escolher uma foto sua (câmera ou galeria). Ela aparece como miniatura em todas as telas e na revelação do impostor. A primeira foto pode ser enviada a qualquer momento; **trocar ou remover só no lobby**. A foto é apagada junto com a sala.
-- **Jogadores por sala:** mínimo de **3**, máximo de **20**.
+- **Jogadores por sala:** mínimo de **3**, máximo de **20**. Ocupa vaga quem já abriu a sala (conexão em tempo real) ou entrou há menos de 2 minutos: entradas que nunca abrem a sala não a deixam cheia.
 - **Entrada:** novos jogadores só podem entrar no **lobby** e **entre rodadas**.
 - **Retenção dos dados:** a sala é apagada **1 hora depois de ficar vazia**, ou **24 horas depois de criada**, mesmo que ainda tenha pessoas.
 - Código curto (4 a 5 caracteres), sem letras ambíguas (O/0, I/1), com checagem de colisão.
-- Nome repetido recebe um número automaticamente.
+- Nome repetido recebe um número automaticamente. O nome é normalizado (a mesma grafia para acentos compostos ou decompostos) e não aceita caracteres invisíveis ou em branco (como o preenchimento coreano U+3164 ou o braille vazio U+2800), nem pilhas de acentos.
 - Se o anfitrião sair ou ficar offline, a função passa para o jogador mais antigo na sala.
+- **Saída:** o jogador pode **sair da sala**, e o anfitrião pode **remover** alguém no lobby; os dois pedem **confirmação**. Quem fica **offline por 3 minutos** é retirado da sala. Quem saiu some do lobby, do placar e do pódio e, para voltar, entra de novo como jogador novo.
 - Reconexão: o jogador volta à mesma sala e ao mesmo lugar (token guardado no aparelho), importante porque o iOS suspende conexões em segundo plano.
 
 ## 4. Configuração da partida
@@ -68,10 +69,10 @@ O **tema** não é definido na criação: é escolhido a cada rodada (ver seçã
 
 ### Impostor
 - Existe **apenas 1 impostor por rodada**.
-- O sorteio não repete o impostor até todos terem sido, depois o ciclo recomeça.
+- O sorteio favorece quem foi impostor menos vezes na partida, mas **todos os jogadores da rodada sempre podem ser sorteados**. Como os resultados são públicos, excluir quem já foi impostor deixaria os jogadores deduzirem o impostor no fim de cada ciclo.
 
 ### Votação
-- Votam os jogadores da rodada, em outro jogador da rodada. O **voto é final**: não dá para trocar.
+- Votam os jogadores da rodada, em outro jogador da rodada. O voto é **confirmado com um botão** e pode ser **trocado** (confirmando de novo) enquanto a votação estiver aberta; ela fecha assim que todos os conectados votaram.
 - Fecha quando **todos os jogadores conectados votarem** ou após **5 minutos**.
 - Até o resultado, todos veem só quem já votou, não em quem.
 - Quem não votar, ou estiver offline, conta como **abstenção**. Jogador offline não trava a votação.
@@ -81,6 +82,8 @@ O **tema** não é definido na criação: é escolhido a cada rodada (ver seçã
 ### Palpite do impostor
 - Se for descoberto, o impostor escolhe a palavra entre ~8 opções da categoria, com a correta entre elas. Sem texto livre.
 - No tema "Pessoas da sala", as opções são os nomes dos jogadores da rodada (menos o próprio impostor).
+- As opções só são enviadas ao impostor: no tema "Pessoas da sala" elas deixam o impostor de fora, então quem as visse saberia quem ele é antes do resultado.
+- Nos temas de palavras, as opções erradas vêm das mesmas palavras ainda não usadas na sala de onde saiu o segredo: um segredo de uma rodada anterior, já revelado, nunca aparece como opção.
 - Ele tem **60 segundos**. Sem escolha, conta como palpite errado.
 
 ### Resultado
@@ -100,7 +103,7 @@ O **tema** não é definido na criação: é escolhido a cada rodada (ver seçã
 - Os temas são um **catálogo fixo** do jogo. O anfitrião **escolhe entre os disponíveis**, não digita.
 - A escolha é feita **no início de cada rodada**, sem lista prévia. O mesmo tema pode ser escolhido várias vezes.
 - Existe a opção **"Sorteio"**, que escolhe um tema ao acaso.
-- A mesma **palavra** não se repete dentro da sala, mesmo que o tema se repita.
+- A mesma **palavra** não se repete dentro da sala, mesmo que o tema se repita. Um tema de palavras só é oferecido para uma rodada enquanto tiver pelo menos **4 palavras ainda não usadas** na sala (o palpite do impostor sai delas).
 - Cada tema tem o seu **banco de palavras** e o seu **banco de perguntas genéricas**, que servem para qualquer palavra do tema. Assim o impostor consegue blefar e quem sabe a palavra consegue responder.
 - Conteúdo inicial: 8 a 10 temas, com ~40 palavras cada. Conteúdo próprio, não copiado de outros jogos.
 
@@ -109,7 +112,7 @@ O **tema** não é definido na criação: é escolhido a cada rodada (ver seçã
 - Primeiro sorteia-se o impostor, depois o tema entre os outros jogadores. O impostor não pode ser o tema.
 - Todos, menos o impostor, veem o nome sorteado, inclusive a própria pessoa sorteada.
 - Banco de perguntas próprio, sobre hábitos e personalidade, com a expressão "essa pessoa" para não depender de gênero. Evitar aparência, saúde e temas sensíveis.
-- Todos os jogadores podem ser sorteados como tema. A mesma pessoa só é sorteada de novo depois de todos terem sido.
+- Todos os jogadores (menos o impostor) sempre podem ser sorteados como tema; quem foi sorteado menos vezes tem mais chance. Assim o impostor não consegue deduzir o nome sorteado pelos resultados anteriores.
 
 ## 8. Perguntas e turnos
 
@@ -148,7 +151,8 @@ Funcionalidade **muito importante**.
 ## 11. Segurança e integridade
 
 - O **servidor é a fonte da verdade**: a palavra só é enviada às conexões de quem não é impostor, e o impostor só é revelado no resultado.
-- Limite de taxa para criar e entrar em salas, e validação do nome (tamanho e caracteres).
+- Limite de taxa por cliente para criar e entrar em salas (e para a foto e a conexão em tempo real), com uma cota pequena de tentativas com código ou token errados, para que ninguém adivinhe códigos de sala. Validação do nome (tamanho e caracteres).
+- Sem token válido, as rotas que pedem token respondem igual para sala inexistente e token errado: não revelam se uma sala existe.
 - Teto técnico de 20 jogadores aplicado no servidor.
 - Tempo limite nas fases (turno e votação) para ninguém travar o jogo.
 

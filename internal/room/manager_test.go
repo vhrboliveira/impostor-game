@@ -52,6 +52,25 @@ type fakeLiveStore struct {
 	endedMatches []game.MatchStatus
 	playAgains   []PlayAgainParams
 	avatars      map[string]Avatar
+	removed      []string
+
+	// failures makes the next calls of a method fail: method name -> how many calls.
+	failures map[string]int
+	// roomGone simulates the room row deleted by the janitor under a live actor.
+	roomGone bool
+	// connected lists the MarkConnected calls, in order.
+	connected []string
+}
+
+var errDatabaseDown = errors.New("database down")
+
+// fail reports whether this call of method must fail. The caller holds f.mu.
+func (f *fakeLiveStore) fail(method string) error {
+	if f.failures[method] > 0 {
+		f.failures[method]--
+		return errDatabaseDown
+	}
+	return nil
 }
 
 func wordList(firstID int64, texts ...string) []Word {
@@ -93,7 +112,7 @@ func newFakeLiveStore(now time.Time) *fakeLiveStore {
 		},
 		themeWords: map[int64][]Word{1: wordList(11, "Pizza", "Sushi", "Lasanha", "Pastel", "Coxinha", "Feijoada", "Taco", "Ramen", "Bolo", "Pudim")},
 		candidates: map[int64]RoundCandidates{
-			1: {Words: []Word{{ID: 11, Text: "Pizza"}}, Questions: questionList("comida", 5)},
+			1: {Words: wordList(11, "Pizza", "Sushi", "Lasanha", "Pastel"), Questions: questionList("comida", 5)},
 			2: {Questions: questionList("pessoa", 5)},
 			3: {Questions: questionList("vazio", 5)}, // no unused word left
 		},
@@ -106,17 +125,17 @@ func newFakeLiveStore(now time.Time) *fakeLiveStore {
 	}
 }
 
-func (f *fakeLiveStore) Authenticate(_ context.Context, code, tokenHash string, _ time.Time) (string, error) {
+func (f *fakeLiveStore) Authenticate(_ context.Context, code, tokenHash string, _ time.Time) (string, string, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	if code != f.state.Code {
-		return "", ErrRoomNotFound
+	if code != f.state.Code || f.roomGone {
+		return "", "", ErrRoomNotFound
 	}
 	id, ok := f.tokens[tokenHash]
 	if !ok {
-		return "", ErrUnauthorized
+		return "", "", ErrUnauthorized
 	}
-	return id, nil
+	return id, f.state.RoomID, nil
 }
 
 func (f *fakeLiveStore) LoadRoom(_ context.Context, code string, _ time.Time) (RoomState, error) {
@@ -131,9 +150,12 @@ func (f *fakeLiveStore) LoadRoom(_ context.Context, code string, _ time.Time) (R
 	return state, nil
 }
 
-func (f *fakeLiveStore) LoadPlayers(context.Context, string, string) ([]PlayerState, error) {
+func (f *fakeLiveStore) LoadPlayers(_ context.Context, roomID, _ string) ([]PlayerState, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if roomID != f.state.RoomID {
+		return nil, nil // another room: no player
+	}
 	return slices.Clone(f.playersInDB), nil
 }
 
@@ -141,7 +163,20 @@ func (f *fakeLiveStore) SetEmptySince(_ context.Context, _ string, since *time.T
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.emptySince = append(f.emptySince, since)
+	if err := f.fail("SetEmptySince"); err != nil {
+		return err
+	}
+	if f.roomGone {
+		return ErrRoomNotFound
+	}
 	f.state.EmptySince = since
+	return nil
+}
+
+func (f *fakeLiveStore) MarkConnected(_ context.Context, playerID string, _ time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.connected = append(f.connected, playerID)
 	return nil
 }
 
@@ -192,6 +227,9 @@ func (f *fakeLiveStore) ExtendTurn(_ context.Context, _ string, deadline time.Ti
 func (f *fakeLiveStore) AdvanceTurn(_ context.Context, params AdvanceTurnParams) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.fail("AdvanceTurn"); err != nil {
+		return err
+	}
 	f.advanced = append(f.advanced, params)
 	return nil
 }
@@ -206,6 +244,9 @@ func (f *fakeLiveStore) ExtendDiscussion(_ context.Context, _ string, deadline t
 func (f *fakeLiveStore) StartVoting(context.Context, string, time.Time) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.fail("StartVoting"); err != nil {
+		return err
+	}
 	f.votings++
 	return nil
 }
@@ -217,15 +258,32 @@ func (f *fakeLiveStore) CastVote(_ context.Context, _, voterID, targetID string,
 	return nil
 }
 
-func (f *fakeLiveStore) LoadThemeWords(_ context.Context, themeID int64) ([]Word, error) {
+// LoadGuessWords returns the theme words that no round other than roundID used, like the storage
+// query (the rounds of the room are the ones the fake began).
+func (f *fakeLiveStore) LoadGuessWords(_ context.Context, _ string, themeID int64, roundID string) ([]Word, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return slices.Clone(f.themeWords[themeID]), nil
+	used := map[int64]bool{}
+	for _, b := range f.began {
+		if b.RoundID != roundID && b.WordID != 0 {
+			used[b.WordID] = true
+		}
+	}
+	var words []Word
+	for _, w := range f.themeWords[themeID] {
+		if !used[w.ID] {
+			words = append(words, w)
+		}
+	}
+	return words, nil
 }
 
 func (f *fakeLiveStore) StartGuess(_ context.Context, params StartGuessParams) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.fail("StartGuess"); err != nil {
+		return err
+	}
 	f.guesses = append(f.guesses, params)
 	return nil
 }
@@ -234,6 +292,9 @@ func (f *fakeLiveStore) StartGuess(_ context.Context, params StartGuessParams) e
 func (f *fakeLiveStore) FinishRound(_ context.Context, params FinishRoundParams) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	if err := f.fail("FinishRound"); err != nil {
+		return err
+	}
 	f.finished = append(f.finished, params)
 	for _, s := range params.Scores {
 		for i := range f.playersInDB {
@@ -271,6 +332,23 @@ func (f *fakeLiveStore) PlayAgain(_ context.Context, params PlayAgainParams) (Ma
 		ID: fmt.Sprintf("match-%d", params.Number), Number: params.Number, Status: game.MatchLobby,
 		TotalRounds: params.TotalRounds, TurnSeconds: params.TurnSeconds,
 	}, nil
+}
+
+func (f *fakeLiveStore) RemovePlayer(_ context.Context, _, playerID, newHostID string, at time.Time) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.removed = append(f.removed, playerID)
+	for _, list := range [][]PlayerState{f.state.Players, f.playersInDB} {
+		for i := range list {
+			switch list[i].ID {
+			case playerID:
+				list[i].LeftAt, list[i].IsHost = &at, false
+			case newHostID:
+				list[i].IsHost = true
+			}
+		}
+	}
+	return nil
 }
 
 func (f *fakeLiveStore) SetAvatar(_ context.Context, playerID string, image []byte, at time.Time) error {
@@ -495,8 +573,9 @@ func TestConnect_Errors(t *testing.T) {
 		token   string
 		wantErr error
 	}{
-		{name: "malformed code", code: "K7", token: "t-ana", wantErr: ErrRoomNotFound},
-		{name: "unknown room", code: "ZZZZZ", token: "t-ana", wantErr: ErrRoomNotFound},
+		// No existence oracle: without a valid token for the room, every case is ErrUnauthorized.
+		{name: "malformed code", code: "K7", token: "t-ana", wantErr: ErrUnauthorized},
+		{name: "unknown room", code: "ZZZZZ", token: "t-ana", wantErr: ErrUnauthorized},
 		{name: "missing token", code: "K7M2P", token: "", wantErr: ErrUnauthorized},
 		{name: "wrong token", code: "K7M2P", token: "nope", wantErr: ErrUnauthorized},
 	}
@@ -727,4 +806,230 @@ func TestActor_ClosesEveryConnectionWhenTheRoomExpires(t *testing.T) {
 		assert.Equal(t, protocol.CloseRoomNotFound, c.closeCode)
 	}
 	assert.Zero(t, h.activeActors())
+}
+
+// A room reloaded with an ended match must not resume the timers of its abandoned round.
+func TestLoadRoom_EndedMatchResumesNoTimer(t *testing.T) {
+	h := newHarness(t)
+	overdue := h.clock.Now().Add(-time.Minute)
+	h.store.state.Match.Status = game.MatchEndedEarly
+	h.store.state.Round = &RoundState{
+		ID: "round-1", Number: 1, Phase: game.PhaseQuestions, Theme: &Theme{ID: 1, Kind: game.ThemeKindWords},
+		ImpostorID: "caio", WordID: 11, Secret: "Pizza",
+		Turns: []TurnState{
+			{ID: "turn-0", Position: 0, AskerID: "ana", AnswererID: "bia", Question: "q0", DeadlineAt: &overdue},
+			{ID: "turn-1", Position: 1, AskerID: "bia", AnswererID: "caio", Question: "q1"},
+			{ID: "turn-2", Position: 2, AskerID: "caio", AnswererID: "ana", Question: "q2"},
+		},
+	}
+
+	_, ana := h.connect("t-ana")
+	h.clock.Advance(0)
+	h.settle()
+
+	assert.Empty(t, h.store.advanced)
+	assert.Equal(t, "questions", ana.lastSnapshot(t).Round.Phase)
+}
+
+// A voting round loaded from the database has no vote rows yet, so storage leaves Votes nil. The
+// first vote and the voting deadline must still work (they used to panic on the nil map and
+// crash the whole process).
+func TestLoadRoom_VotingWithoutVotes(t *testing.T) {
+	load := func(t *testing.T, deadline time.Time) *harness {
+		h := newHarness(t)
+		h.store.state.Match.Status = game.MatchInProgress
+		h.store.state.Round = &RoundState{
+			ID: "round-1", Number: 1, Phase: game.PhaseVoting, Theme: &Theme{ID: 1, Kind: game.ThemeKindWords},
+			ImpostorID: "caio", WordID: 11, Secret: "Pizza", PhaseDeadline: &deadline,
+			Turns: []TurnState{
+				{ID: "turn-0", Position: 0, AskerID: "ana", AnswererID: "bia"},
+				{ID: "turn-1", Position: 1, AskerID: "bia", AnswererID: "caio"},
+				{ID: "turn-2", Position: 2, AskerID: "caio", AnswererID: "ana"},
+			},
+		}
+		return h
+	}
+
+	t.Run("first vote", func(t *testing.T) {
+		h := load(t, h0().Add(4*time.Minute))
+		conn, ana := h.connect("t-ana")
+		h.connect("t-bia")
+		conn.Handle(protocol.ClientMessage{Type: protocol.TypeVote, Vote: &protocol.VotePayload{TargetID: "caio"}})
+		h.settle()
+
+		assert.Equal(t, []string{"ana>caio"}, h.store.castVotes)
+		assert.Equal(t, []string{"ana"}, ana.lastSnapshot(t).Round.VotedIDs)
+	})
+
+	t.Run("deadline already passed", func(t *testing.T) {
+		h := load(t, h0().Add(-time.Second))
+		_, bia := h.connect("t-bia")
+		h.clock.Advance(0)
+		h.settle()
+
+		require.Len(t, h.store.finished, 1)
+		assert.ElementsMatch(t, []string{"ana", "bia", "caio"}, h.store.finished[0].Abstainers)
+		assert.Equal(t, "result", bia.lastSnapshot(t).Round.Phase)
+	})
+}
+
+// h0 is the fake clock's start time used by newHarness.
+func h0() time.Time { return time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC) }
+
+// A panic inside one room's actor stops only that room: its connections are closed with 1011
+// (the web app reconnects), and the Manager keeps serving rooms, this one included.
+func TestActor_PanicStopsOnlyThatRoom(t *testing.T) {
+	h := newHarness(t)
+	_, ana := h.connect("t-ana")
+	h.m.mu.Lock()
+	a := h.m.actors["K7M2P"]
+	h.m.mu.Unlock()
+
+	a.do(func() { panic("boom") })
+	select {
+	case <-a.done:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the actor did not stop after the panic")
+	}
+
+	ana.mu.Lock()
+	closed, code := ana.closed, ana.closeCode
+	ana.mu.Unlock()
+	assert.True(t, closed)
+	assert.Equal(t, protocol.CloseInternalError, code)
+	assert.Equal(t, 0, h.activeActors())
+
+	_, bia := h.connect("t-bia")
+	assert.Equal(t, "lobby", bia.lastSnapshot(t).Match.Status)
+}
+
+// --- empty_since: the marker the janitor relies on must follow the real occupancy -----------
+
+func (h *harness) emptySince() *time.Time {
+	h.store.mu.Lock()
+	defer h.store.mu.Unlock()
+	return h.store.state.EmptySince
+}
+
+func TestEmptySince_RetriesAFailedClear(t *testing.T) {
+	h := newHarness(t)
+	h.store.failures = map[string]int{"SetEmptySince": 1}
+
+	h.connect("t-ana") // the clear fails: the room still looks empty to the janitor
+	require.NotNil(t, h.emptySince())
+
+	h.connect("t-bia")
+	assert.Nil(t, h.emptySince(), "the next connection retries the clear")
+}
+
+func TestEmptySince_IdleStopMarksTheRoomEmpty(t *testing.T) {
+	// After a crash the stored marker still says "occupied". An actor started only by a REST call
+	// must not stop leaving it like that, or the room outlives the empty-room deletion.
+	h := newHarness(t)
+	h.store.state.EmptySince = nil
+	require.NoError(t, h.m.DeleteAvatar(context.Background(), "k7m2p", "t-ana"))
+
+	h.clock.Advance(2 * time.Minute)
+	h.settle()
+
+	assert.Equal(t, 0, h.activeActors())
+	assert.NotNil(t, h.emptySince())
+}
+
+func TestEmptySince_FailedMarkIsRetriedBeforeTheActorStops(t *testing.T) {
+	h := newHarness(t)
+	conn, _ := h.connect("t-ana")
+	h.store.mu.Lock()
+	h.store.failures = map[string]int{"SetEmptySince": 1}
+	h.store.mu.Unlock()
+
+	conn.Leave()
+	h.settle()
+	require.Nil(t, h.emptySince(), "the mark failed")
+
+	h.clock.Advance(2 * time.Minute)
+	h.settle()
+	assert.NotNil(t, h.emptySince())
+	assert.Equal(t, 0, h.activeActors())
+}
+
+func TestEmptySince_RoomDeletedUnderTheActor(t *testing.T) {
+	h := newHarness(t)
+	conn, _ := h.connect("t-ana")
+	h.store.mu.Lock()
+	h.store.roomGone = true
+	h.store.mu.Unlock()
+
+	conn.Leave()
+	h.settle()
+	assert.Equal(t, 0, h.activeActors(), "the actor of a deleted room stops at once")
+}
+
+// A room code is reused only after its room was deleted. An actor still alive for the old room
+// must not serve the new one.
+func TestConnect_StaleActorOfAReusedCode(t *testing.T) {
+	h := newHarness(t)
+	_, ana := h.connect("t-ana")
+
+	h.store.mu.Lock()
+	duda := PlayerState{ID: "duda", Name: "Duda", IsHost: true, JoinedAt: h0()}
+	h.store.state.RoomID = "room-2"
+	h.store.state.Players = []PlayerState{duda}
+	h.store.playersInDB = []PlayerState{duda}
+	h.store.tokens = map[string]string{HashToken("t-duda"): "duda"}
+	h.store.mu.Unlock()
+
+	_, client := h.connect("t-duda")
+	players := client.lastSnapshot(t).Players
+	require.Len(t, players, 1)
+	assert.Equal(t, "duda", players[0].ID)
+
+	ana.mu.Lock()
+	defer ana.mu.Unlock()
+	assert.True(t, ana.closed)
+	assert.Equal(t, protocol.CloseRoomNotFound, ana.closeCode)
+}
+
+// A player holds at most maxConnsPerPlayer connections: a new one closes the oldest (a stale
+// socket of a reconnecting phone), so connection counts stay bounded.
+func TestConnect_CapsConnectionsPerPlayer(t *testing.T) {
+	h := newHarness(t)
+	var clients []*fakeClient
+	for range maxConnsPerPlayer + 1 {
+		_, c := h.connect("t-ana")
+		clients = append(clients, c)
+	}
+	h.settle()
+
+	clients[0].mu.Lock()
+	closed, code := clients[0].closed, clients[0].closeCode
+	clients[0].mu.Unlock()
+	assert.True(t, closed, "the oldest connection is closed")
+	assert.Equal(t, protocol.ClosePolicyViolation, code)
+	for _, c := range clients[1:] {
+		c.mu.Lock()
+		assert.False(t, c.closed)
+		c.mu.Unlock()
+	}
+
+	h.m.mu.Lock()
+	a := h.m.actors["K7M2P"]
+	h.m.mu.Unlock()
+	reply := make(chan int, 1)
+	a.do(func() { reply <- len(a.conns["ana"]) })
+	assert.Equal(t, maxConnsPerPlayer, <-reply)
+}
+
+// The first connection of each player is recorded: only players who opened the room (or joined
+// a moment ago) hold a seat against the room's limit.
+func TestConnect_RecordsTheFirstConnection(t *testing.T) {
+	h := newHarness(t)
+	h.connect("t-ana")
+	h.connect("t-ana")
+	h.connect("t-bia")
+	h.settle()
+
+	h.store.mu.Lock()
+	defer h.store.mu.Unlock()
+	assert.Equal(t, []string{"ana", "bia"}, h.store.connected)
 }

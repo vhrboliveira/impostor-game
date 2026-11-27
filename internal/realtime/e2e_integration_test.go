@@ -49,7 +49,13 @@ func newApp(t *testing.T) *app {
 	foods := &storage.Theme{Slug: "foods", Name: "Comidas", Kind: "words"}
 	_, err := db.NewInsert().Model(foods).Returning("id").Exec(ctx)
 	require.NoError(t, err)
-	_, err = db.NewInsert().Model(&storage.Word{ThemeID: foods.ID, Text: "Pizza"}).Exec(ctx)
+	// game.MinGuessWords unused words: the fewest a words theme needs to feed a round.
+	_, err = db.NewInsert().Model(&[]storage.Word{
+		{ThemeID: foods.ID, Text: "Pizza"},
+		{ThemeID: foods.ID, Text: "Sushi"},
+		{ThemeID: foods.ID, Text: "Pastel"},
+		{ThemeID: foods.ID, Text: "Coxinha"},
+	}).Exec(ctx)
 	require.NoError(t, err)
 	_, err = db.NewInsert().Model(&[]storage.Question{
 		{Kind: "words", ThemeID: &foods.ID, Text: "Doce ou salgado?"},
@@ -81,6 +87,7 @@ func (a *app) post(path, body string) (int, map[string]any) {
 	a.t.Helper()
 	req, err := http.NewRequestWithContext(a.t.Context(), http.MethodPost, a.url+path, strings.NewReader(body))
 	require.NoError(a.t, err)
+	req.Header.Set("Content-Type", "application/json")
 	resp, err := http.DefaultClient.Do(req)
 	require.NoError(a.t, err)
 	defer func() { _ = resp.Body.Close() }()
@@ -242,7 +249,8 @@ func TestEndToEnd_FinalCloseCodes(t *testing.T) {
 
 	assert.Equal(t, websocket.StatusCode(protocol.CloseUnauthorized),
 		readClose(session{RoomCode: host.RoomCode, Token: "not-a-token"}))
-	assert.Equal(t, websocket.StatusCode(protocol.CloseRoomNotFound),
+	// No existence oracle: an unknown room closes like a wrong token.
+	assert.Equal(t, websocket.StatusCode(protocol.CloseUnauthorized),
 		readClose(session{RoomCode: "ZZZZZ", Token: host.Token}))
 }
 
@@ -268,7 +276,7 @@ func TestEndToEnd_PlayAMatch(t *testing.T) {
 	send(t, conns[host.PlayerID], `{"type":"select_theme","payload":{"themeId":`+strconv.FormatInt(themeID, 10)+`}}`)
 
 	impostors := 0
-	var impostor string
+	var impostor, secret string
 	for id, conn := range conns {
 		reveal := waitSnapshot(t, conn, inPhase("reveal"))
 		assert.Equal(t, "Comidas", *reveal.Round.ThemeName)
@@ -279,7 +287,12 @@ func TestEndToEnd_PlayAMatch(t *testing.T) {
 			impostor = id
 			assert.Nil(t, reveal.Me.Secret)
 		} else {
-			assert.Equal(t, "Pizza", *reveal.Me.Secret)
+			require.NotNil(t, reveal.Me.Secret)
+			assert.Contains(t, []string{"Pizza", "Sushi", "Pastel", "Coxinha"}, *reveal.Me.Secret)
+			if secret == "" {
+				secret = *reveal.Me.Secret
+			}
+			assert.Equal(t, secret, *reveal.Me.Secret, "every insider sees the same secret")
 		}
 	}
 	assert.Equal(t, 1, impostors)
@@ -331,16 +344,25 @@ func TestEndToEnd_PlayAMatch(t *testing.T) {
 	send(t, conns[impostor], `{"type":"vote","payload":{"targetId":"`+insiders[0]+`"}}`)
 
 	guess := waitSnapshot(t, conns[impostor], inPhase("guess"))
-	require.Len(t, guess.Round.GuessOptions, 1, "the theme has a single word")
-	assert.Equal(t, "Pizza", guess.Round.GuessOptions[0].Label)
-	send(t, conns[impostor], `{"type":"guess","payload":{"optionId":"`+guess.Round.GuessOptions[0].ID+`"}}`)
+	require.Len(t, guess.Round.GuessOptions, 4, "every unused word of the theme")
+	var right string
+	for _, o := range guess.Round.GuessOptions {
+		if o.Label == secret {
+			right = o.ID
+		}
+	}
+	require.NotEmpty(t, right, "the secret is among the options")
+	for _, id := range insiders {
+		assert.Empty(t, waitSnapshot(t, conns[id], inPhase("guess")).Round.GuessOptions, "only the impostor gets the options")
+	}
+	send(t, conns[impostor], `{"type":"guess","payload":{"optionId":"`+right+`"}}`)
 
 	for _, conn := range conns {
 		result := waitSnapshot(t, conn, inPhase("result")).Round.Result
 		require.NotNil(t, result)
 		assert.Equal(t, impostor, result.ImpostorID)
 		assert.True(t, result.ImpostorFound)
-		assert.Equal(t, "Pizza", result.Secret)
+		assert.Equal(t, secret, result.Secret)
 		require.NotNil(t, result.Guess)
 		assert.True(t, result.Guess.Correct)
 		assert.Len(t, result.Votes, 3)

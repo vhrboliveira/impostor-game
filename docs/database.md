@@ -31,12 +31,12 @@ erDiagram
 | `words` | Words of the `words` themes. |
 | `questions` | Questions read aloud. `kind` is required, `theme_id` is optional (null means generic for that kind). |
 | `rooms` | A room: `code`, `expires_at` (creation + 24h) and `empty_since`. |
-| `players` | Players of a room: `is_host`, `token_hash` (SHA-256), `joined_at` (orders the host succession). `last_seen_at` is set on joining and not updated yet: presence lives in the room actor's memory. |
+| `players` | Players of a room: `is_host`, `token_hash` (SHA-256), `joined_at` (orders the host succession), `connected_at` (the first time the player opened the room's WebSocket, null before; migration `add_player_connected_at`), `left_at` (when they left or were removed; null while in the room; migration `add_player_left_at`: players are marked, never deleted, since deleting cascades to their rounds). `last_seen_at` is set on joining and not updated yet: presence lives in the room actor's memory. |
 | `player_avatars` | A player's optional photo (`image`, a JPEG re-encoded by the server, 1 byte to 500 KiB) and `updated_at`, its version in the avatar URL. Apart from `players` so the usual queries never read the image; `loadPlayers` only reads `updated_at`. |
 | `matches` | A match in a room: status, `total_rounds` (3, 5, 8, 10, 12), `turn_seconds`. "Play again" adds a match. |
 | `rounds` | A round: phase, theme, secret (`word_id` or `subject_player_id`), impostor, `current_turn`, `phase_deadline_at`, `impostor_found`, `guess_options` (JSON array of option ids), the guess (`guess_word_id` or `guess_player_id`, `guess_correct`). |
 | `turns` | The ring of turns of a round, created up front: asker, answerer, question, deadline, `ended_by`. |
-| `votes` | One per player per round, final (primary key). `target_id` null is an abstention, recorded when the voting closes. |
+| `votes` | One per player per round (primary key); a new vote replaces it while the voting is open. `target_id` null is an abstention, recorded when the voting closes. |
 | `round_scores` | Points per round and reason. The scoreboard is their sum. |
 
 ## Invariants enforced by the database
@@ -45,7 +45,8 @@ erDiagram
 - A question's `kind` matches its theme's kind (composite foreign key; skipped for generic
   questions, whose `theme_id` is null).
 - A question text is unique per `(kind, theme_id)`, including generic ones (`NULLS NOT DISTINCT`).
-- At most one host per room (partial unique index) and unique player names within a room.
+- At most one host per room (partial unique index), unique player names among the players still
+  in the room (partial unique index `WHERE left_at IS NULL`), and nobody who left is the host.
 - A round never has both a word and a player as secret, and its word belongs to its theme.
 - A question never repeats within a round, and a turn's asker differs from its answerer.
 - Nobody votes for themselves.
@@ -98,7 +99,9 @@ test helper that resets the schema (`storagetest`).
    match is in `lobby`, or `in_progress` with its latest round in `result`. Otherwise it fails
    with `match_in_progress` (a round is running, or the match has no round yet) or
    `match_finished` (`finished`, `ended_early`).
-3. Counts the players against the limit (20).
+3. Counts the players holding a seat against the limit (20): those with `connected_at` set, or who
+   joined less than `game.SeatHoldTime` (2 minutes) ago. Joins that never open the room stop
+   counting, so they cannot keep it full.
 4. Inserts the player with `ON CONFLICT (room_id, name) DO NOTHING`: no row back means the name
    is taken, and the service retries with a numbered name.
 
@@ -111,7 +114,13 @@ The room actors (`storage/live.go`, `room.LiveStore`) authenticate a connection 
 the room by code (not expired) and then the player of that room with the SHA-256 of the token
 (`token_hash`); the token itself is never stored. They write:
 
-- `rooms.empty_since`: cleared when the first player connects, set when the last one leaves.
+- `rooms.empty_since`: cleared while someone is connected (each connection retries a failed
+  clear), set when the last one leaves or when an idle actor stops with it still clear. The update
+  reports a missing row (`room.ErrRoomNotFound`), so an actor learns that the janitor deleted its
+  room. At startup `Rooms.MarkAllEmpty` sets it on every room where it is null: no WebSocket
+  survives a restart.
+- `players.connected_at`: set on a player's first connection (`MarkConnected`; later calls change
+  nothing).
 - `players.is_host`: moved in one transaction when the host transfers (clear the old host,
   then set the new one, so the one-host partial unique index always holds).
 - `StartMatch`: locks the room row (`FOR UPDATE`, like a join), sets the match `in_progress`
@@ -136,11 +145,12 @@ Round flow (`storage/live.go`):
 Voting, guess and result (`storage/live.go`):
 
 - `StartVoting` sets `phase = 'voting'` and `phase_deadline_at` (5 minutes).
-- `CastVote` inserts a vote; the primary key `(round_id, voter_id)` makes it final, and the
-  `CHECK` refuses self-votes.
+- `CastVote` upserts the vote on the primary key `(round_id, voter_id)` (a player can change it
+  while the voting is open), and the `CHECK` refuses self-votes.
 - `StartGuess` records the abstentions (`target_id` null), sets `impostor_found`, the
-  `guess_options` and `phase = 'guess'` with a 60-second `phase_deadline_at`. `LoadThemeWords`
-  provides the candidate words.
+  `guess_options` and `phase = 'guess'` with a 60-second `phase_deadline_at`. `LoadGuessWords`
+  provides the candidate words: the words of the theme no other round of the room used (the same
+  set the secret was drawn from), so no option can be ruled out from an earlier result.
 - `FinishRound` records the abstentions (when coming straight from the voting), the outcome and
   the guess, inserts the `round_scores` and sets `phase = 'result'`, guarded by
   `phase IN ('voting', 'guess')`.
@@ -157,6 +167,7 @@ read-only repeatable-read transaction.
 ## Cleanup
 
 `internal/janitor` calls `Rooms.DeleteExpired` every minute: rooms with `expires_at` in the past
-and rooms empty for more than `EMPTY_ROOM_TTL` (1 hour) are deleted. Because all child tables
+and rooms empty for more than `EMPTY_ROOM_TTL` (1 hour) are deleted, in batches of 500 until a
+batch comes back short, within 30 seconds per run (a hung database does not stall it). Because all child tables
 and cross-table player references cascade on delete, removing expired rooms deletes all associated
 players, matches, rounds, turns, votes, and scores in a single query without foreign key conflicts.

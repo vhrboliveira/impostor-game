@@ -13,6 +13,7 @@ import (
 	"github.com/stretchr/testify/require"
 	"github.com/uptrace/bun"
 
+	"github.com/vhrboliveira/impostor-game/internal/game"
 	"github.com/vhrboliveira/impostor-game/internal/room"
 	"github.com/vhrboliveira/impostor-game/internal/storage"
 )
@@ -173,6 +174,30 @@ func TestRooms_AddPlayer(t *testing.T) {
 
 		_, err := rooms.AddPlayer(ctx, params)
 
+		require.ErrorIs(t, err, room.ErrRoomFull)
+	})
+
+	// Seats taken by joins that never opened the room (no WebSocket ever) stop counting after
+	// game.SeatHoldTime, so REST-only joins cannot keep a room full.
+	t.Run("players who never connected stop holding a seat", func(t *testing.T) {
+		db, rooms, roomID := setup(t)
+		earlier := lobbyNow.Add(-game.SeatHoldTime - time.Minute)
+		insert(t, db, &storage.Player{RoomID: roomID, Name: "Ghost", TokenHash: "hash-ghost", JoinedAt: earlier, LastSeenAt: earlier})
+		params := addParams("ABCDE", "Bia")
+		params.MaxPlayers = 2 // the host (joined just now) and Ghost
+
+		_, err := rooms.AddPlayer(ctx, params)
+		require.NoError(t, err)
+	})
+
+	t.Run("a player who connected keeps their seat", func(t *testing.T) {
+		db, rooms, roomID := setup(t)
+		earlier := lobbyNow.Add(-game.SeatHoldTime - time.Minute)
+		insert(t, db, &storage.Player{RoomID: roomID, Name: "Duda", TokenHash: "hash-duda", JoinedAt: earlier, LastSeenAt: earlier, ConnectedAt: &earlier})
+		params := addParams("ABCDE", "Bia")
+		params.MaxPlayers = 2
+
+		_, err := rooms.AddPlayer(ctx, params)
 		require.ErrorIs(t, err, room.ErrRoomFull)
 	})
 

@@ -97,6 +97,18 @@ func TestNormalizeName(t *testing.T) {
 		{name: "control character", raw: "a\x00b", wantErr: true},
 		{name: "zero width space", raw: "a\u200bb", wantErr: true},
 		{name: "invalid utf-8", raw: "\xff\xfe", wantErr: true},
+		// One way to write each name: NFD and NFC spellings collide like any repeated name.
+		{name: "decomposed accent becomes composed", raw: "Jose\u0301", want: "José"},
+		{name: "two combining marks are fine", raw: "Nguye\u0302\u0303n", want: "Nguyễn"},
+		{name: "emoji with variation selector", raw: "\u2764\ufe0f Ana", want: "\u2764\ufe0f Ana"},
+		// Invisible or blank characters would make names that look empty or identical.
+		{name: "hangul filler", raw: "Ana\u3164", wantErr: true},
+		{name: "only a hangul filler", raw: "\u3164", wantErr: true},
+		{name: "halfwidth hangul filler", raw: "\uffa0", wantErr: true},
+		{name: "braille blank", raw: "Ana\u2800", wantErr: true},
+		{name: "combining grapheme joiner", raw: "A\u034fna", wantErr: true},
+		{name: "stacked combining marks", raw: "a\u0301\u0302\u0303\u0304", wantErr: true},
+		{name: "only combining marks", raw: "\u0301\u0302", wantErr: true},
 	}
 
 	for _, tt := range tests {

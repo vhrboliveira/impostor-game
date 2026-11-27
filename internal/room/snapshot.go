@@ -27,6 +27,7 @@ func (a *actor) snapshotFor(playerID string) protocol.RoomSnapshot {
 			IsConnected: a.isConnected(p.ID),
 			Score:       p.Score,
 			AvatarURL:   avatarURL,
+			HasLeft:     !p.Active(),
 		})
 	}
 
@@ -36,7 +37,7 @@ func (a *actor) snapshotFor(playerID string) protocol.RoomSnapshot {
 	)
 	if r := a.state.Round; r != nil {
 		roundNumber = r.Number
-		round = a.roundView(r)
+		round = a.roundView(r, playerID)
 	}
 
 	return protocol.RoomSnapshot{
@@ -52,7 +53,7 @@ func (a *actor) snapshotFor(playerID string) protocol.RoomSnapshot {
 	}
 }
 
-func (a *actor) roundView(r *RoundState) *protocol.RoundView {
+func (a *actor) roundView(r *RoundState, playerID string) *protocol.RoundView {
 	view := &protocol.RoundView{
 		Number:       r.Number,
 		Phase:        string(r.Phase),
@@ -74,9 +75,10 @@ func (a *actor) roundView(r *RoundState) *protocol.RoundView {
 			view.ThemeOptions = append(view.ThemeOptions, protocol.ThemeOption{ID: t.ID, Name: t.Name})
 		}
 	case game.PhaseReveal:
-		for _, turn := range r.Turns { // ring order
-			if a.confirmed[turn.AskerID] {
-				view.ConfirmedIDs = append(view.ConfirmedIDs, turn.AskerID)
+		// Player order, not ring order: the ring (who asks whom) is only shown turn by turn.
+		for _, p := range a.state.Players {
+			if a.confirmed[p.ID] && r.hasPlayer(p.ID) {
+				view.ConfirmedIDs = append(view.ConfirmedIDs, p.ID)
 			}
 		}
 	case game.PhaseQuestions:
@@ -97,8 +99,12 @@ func (a *actor) roundView(r *RoundState) *protocol.RoundView {
 			}
 		}
 	case game.PhaseGuess:
-		for _, o := range r.GuessOptions {
-			view.GuessOptions = append(view.GuessOptions, protocol.GuessOption{ID: o.ID, Label: o.Label})
+		// Only the found impostor picks. In a players theme the options leave the impostor out, so
+		// sending them to anyone else would reveal who the impostor is before the result.
+		if playerID == r.ImpostorID {
+			for _, o := range r.GuessOptions {
+				view.GuessOptions = append(view.GuessOptions, protocol.GuessOption{ID: o.ID, Label: o.Label})
+			}
 		}
 	case game.PhaseResult:
 		view.Result = resultView(r)

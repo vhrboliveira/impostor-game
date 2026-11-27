@@ -104,7 +104,7 @@ func TestSelectTheme_Errors(t *testing.T) {
 
 	t.Run("fewer questions than players", func(t *testing.T) {
 		tb := newTable(t)
-		tb.store.candidates[1] = RoundCandidates{Words: []Word{{ID: 11, Text: "Pizza"}}, Questions: questionList("q", 2)}
+		tb.store.candidates[1] = RoundCandidates{Words: wordList(11, "Pizza", "Sushi", "Lasanha", "Pastel"), Questions: questionList("q", 2)}
 		tb.selectTheme(1)
 
 		assert.Equal(t, protocol.ErrCodeThemeUnavailable, tb.clients["ana"].lastError())
@@ -446,4 +446,111 @@ func TestResume_ARoundLoadedFromTheDatabaseKeepsItsDeadline(t *testing.T) {
 	require.Len(t, s.Round.Turns, 2)
 	assert.Equal(t, "Pizza", *s.Me.Secret)
 	assert.Equal(t, protocol.RoleInsider, *s.Me.Role)
+}
+
+// A timer-driven transition whose database write fails is retried: the round must not stay stuck
+// in its phase with no deadline.
+func TestTimers_RetryAfterADatabaseFailure(t *testing.T) {
+	failNext := func(tb *table, method string) {
+		tb.store.mu.Lock()
+		tb.store.failures = map[string]int{method: 1}
+		tb.store.mu.Unlock()
+	}
+	toDiscussion := func(tb *table) {
+		tb.toQuestions()
+		for range 3 {
+			tb.send(tb.currentTurn().AnswererID, protocol.ClientMessage{Type: protocol.TypeNextTurn})
+		}
+		require.Equal(tb.t, "discussion", tb.snapshot("ana").Round.Phase)
+	}
+
+	t.Run("turn deadline", func(t *testing.T) {
+		tb := newTable(t)
+		tb.toQuestions()
+		failNext(tb, "AdvanceTurn")
+		tb.clock.Advance(3 * time.Minute)
+		tb.settle()
+		require.Empty(t, tb.store.advanced)
+
+		tb.clock.Advance(storeRetryDelay)
+		tb.settle()
+		assert.Len(t, tb.store.advanced, 1)
+	})
+
+	t.Run("discussion deadline", func(t *testing.T) {
+		tb := newTable(t)
+		toDiscussion(tb)
+		failNext(tb, "StartVoting")
+		tb.clock.Advance(3 * time.Minute)
+		tb.settle()
+		require.Equal(t, "discussion", tb.snapshot("ana").Round.Phase)
+
+		tb.clock.Advance(storeRetryDelay)
+		tb.settle()
+		assert.Equal(t, "voting", tb.snapshot("ana").Round.Phase)
+	})
+
+	t.Run("voting deadline", func(t *testing.T) {
+		tb := newTable(t)
+		tb.toVoting()
+		failNext(tb, "FinishRound")
+		tb.clock.Advance(game.VoteTimeout)
+		tb.settle()
+		require.Equal(t, "voting", tb.snapshot("ana").Round.Phase)
+
+		tb.clock.Advance(storeRetryDelay)
+		tb.settle()
+		assert.Equal(t, "result", tb.snapshot("ana").Round.Phase)
+	})
+
+	t.Run("voting deadline opening the guess", func(t *testing.T) {
+		tb := newTable(t)
+		tb.toVoting()
+		impostor := tb.impostor()
+		insiders := tb.others(impostor)
+		tb.vote(insiders[0], impostor)
+		tb.vote(insiders[1], impostor)
+		failNext(tb, "StartGuess")
+		tb.clock.Advance(game.VoteTimeout)
+		tb.settle()
+		require.Equal(t, "voting", tb.snapshot("ana").Round.Phase)
+
+		tb.clock.Advance(storeRetryDelay)
+		tb.settle()
+		assert.Equal(t, "guess", tb.snapshot("ana").Round.Phase)
+	})
+
+	t.Run("guess deadline", func(t *testing.T) {
+		tb := newTable(t)
+		tb.toVoting()
+		tb.everyoneVotesForTheImpostor()
+		require.Equal(t, "guess", tb.snapshot("ana").Round.Phase)
+		failNext(tb, "FinishRound")
+		tb.clock.Advance(game.GuessTimeout)
+		tb.settle()
+		require.Equal(t, "guess", tb.snapshot("ana").Round.Phase)
+
+		tb.clock.Advance(storeRetryDelay)
+		tb.settle()
+		assert.Equal(t, "result", tb.snapshot("ana").Round.Phase)
+	})
+}
+
+// Confirming the reveal again changes nothing, so it sends nothing: a player repeating it cannot
+// make the room broadcast at will.
+func TestConfirmReveal_RepeatedSendsNothing(t *testing.T) {
+	tb := newTable(t)
+	tb.selectTheme(1)
+	tb.send("ana", protocol.ClientMessage{Type: protocol.TypeConfirmReveal})
+	tb.clients["bia"].mu.Lock()
+	before := len(tb.clients["bia"].messages)
+	tb.clients["bia"].mu.Unlock()
+
+	for range 5 {
+		tb.send("ana", protocol.ClientMessage{Type: protocol.TypeConfirmReveal})
+	}
+
+	tb.clients["bia"].mu.Lock()
+	defer tb.clients["bia"].mu.Unlock()
+	assert.Len(t, tb.clients["bia"].messages, before)
 }

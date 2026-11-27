@@ -8,57 +8,49 @@ import (
 // ErrNoCandidates is returned when nobody is eligible to be picked.
 var ErrNoCandidates = errors.New("no eligible candidates")
 
-// PickImpostor chooses the impostor of the next round. Nobody repeats until everyone has been
-// the impostor; after that the cycle starts over. history lists the impostors of the previous
-// rounds of the match, oldest first.
+// PickImpostor chooses the impostor of the next round. Every player of the round stays eligible
+// in every draw: the results are public, so excluding earlier impostors would let the players
+// deduce the impostor at the end of each cycle. Players picked less often in the match weigh
+// more, which spreads the role over a match. history lists the impostors of the previous rounds
+// of the match, oldest first.
 func PickImpostor(players, history []PlayerID, rng Rand) (PlayerID, error) {
-	return pickFromCycle(players, history, nil, rng)
+	return pickWeighted(players, history, nil, rng)
 }
 
-// PickSubject chooses the player used as the secret in a "players" theme. The impostor can
-// never be the subject, and the same player is only picked again after everyone has been.
-// history lists the subjects of the previous rounds of the match, oldest first.
+// PickSubject chooses the player used as the secret in a "players" theme. The impostor can never
+// be the subject; every other player stays eligible, so the impostor cannot rule out earlier
+// subjects, and players picked less often weigh more. history lists the subjects of the previous
+// rounds of the match, oldest first.
 func PickSubject(players, history []PlayerID, impostor PlayerID, rng Rand) (PlayerID, error) {
-	return pickFromCycle(players, history, []PlayerID{impostor}, rng)
+	return pickWeighted(players, history, []PlayerID{impostor}, rng)
 }
 
-func pickFromCycle(players, history, excluded []PlayerID, rng Rand) (PlayerID, error) {
-	seen := cycleSeen(players, history)
-
-	candidates := slices.DeleteFunc(slices.Clone(players), func(p PlayerID) bool {
-		return seen[p] || slices.Contains(excluded, p)
-	})
-	if len(candidates) == 0 {
-		// Only excluded players were left in the cycle: start a new one.
-		candidates = slices.DeleteFunc(slices.Clone(players), func(p PlayerID) bool {
-			return slices.Contains(excluded, p)
-		})
+// pickWeighted draws one of players, never one of excluded. Each candidate weighs
+// 1 + (most picks of a current player) - (own picks): never zero, so no history removes a
+// candidate, and the least picked are the most likely. Picks of players who left are ignored.
+func pickWeighted(players, history, excluded []PlayerID, rng Rand) (PlayerID, error) {
+	picks := make(map[PlayerID]int, len(players))
+	for _, p := range history {
+		if slices.Contains(players, p) {
+			picks[p]++
+		}
 	}
-	if len(candidates) == 0 {
+	most := 0
+	for _, p := range players {
+		most = max(most, picks[p])
+	}
+
+	var pool []PlayerID
+	for _, p := range players {
+		if slices.Contains(excluded, p) {
+			continue
+		}
+		for range 1 + most - picks[p] {
+			pool = append(pool, p)
+		}
+	}
+	if len(pool) == 0 {
 		return "", ErrNoCandidates
 	}
-
-	return candidates[rng.IntN(len(candidates))], nil
-}
-
-// cycleSeen replays the history and returns who has already been picked in the current cycle.
-// The set is cleared every time all current players have been picked.
-func cycleSeen(players, history []PlayerID) map[PlayerID]bool {
-	seen := make(map[PlayerID]bool, len(players))
-	for _, picked := range history {
-		seen[picked] = true
-		if allSeen(players, seen) {
-			clear(seen)
-		}
-	}
-	return seen
-}
-
-func allSeen(players []PlayerID, seen map[PlayerID]bool) bool {
-	for _, p := range players {
-		if !seen[p] {
-			return false
-		}
-	}
-	return true
+	return pool[rng.IntN(len(pool))], nil
 }

@@ -69,6 +69,10 @@ type Player struct {
 	TokenHash  string    `bun:"token_hash,notnull"`
 	JoinedAt   time.Time `bun:"joined_at,nullzero,notnull"`
 	LastSeenAt time.Time `bun:"last_seen_at,nullzero,notnull"`
+	// ConnectedAt is when the player first opened the room (WebSocket), nil before.
+	ConnectedAt *time.Time `bun:"connected_at"`
+	// LeftAt is when the player left the room (or was removed); nil while they are in it.
+	LeftAt *time.Time `bun:"left_at"`
 }
 
 // PlayerAvatar is a row of the player_avatars table: a player's photo, as a JPEG.

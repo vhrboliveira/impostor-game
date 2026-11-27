@@ -13,12 +13,27 @@ import (
 // the room's actor, which applies the rule (a first photo at any moment, a change only in the
 // lobby) and sends everyone a snapshot with the new avatar URL. It returns ErrRoomNotFound,
 // ErrUnauthorized, ErrInvalidAvatar or ErrAvatarLocked.
+//
+// The token is checked before the image is decoded, so an anonymous upload costs no decoding.
+// Decoding runs outside the actor, under a process-wide limit, and gives up when ctx ends.
 func (m *Manager) SetAvatar(ctx context.Context, rawCode, token string, image []byte) error {
-	normalized, err := NormalizeAvatar(image)
+	code, playerID, roomID, err := m.authenticate(ctx, rawCode, token)
 	if err != nil {
 		return err
 	}
-	return m.withPlayer(ctx, rawCode, token, func(a *actor, playerID string) error {
+
+	select {
+	case m.avatarSlots <- struct{}{}:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	normalized, err := NormalizeAvatar(image)
+	<-m.avatarSlots
+	if err != nil {
+		return err
+	}
+
+	return m.onActor(ctx, code, roomID, func(a *actor) error {
 		return a.setAvatar(playerID, normalized)
 	})
 }
@@ -43,40 +58,27 @@ func (m *Manager) Avatar(ctx context.Context, rawCode, playerID string) (Avatar,
 // withPlayer authenticates the player and runs fn on the room's actor, starting one if nobody is
 // connected (a photo is usually sent right after joining, before the WebSocket opens).
 func (m *Manager) withPlayer(ctx context.Context, rawCode, token string, fn func(a *actor, playerID string) error) error {
-	code, ok := NormalizeCode(rawCode)
-	if !ok {
-		return ErrRoomNotFound
-	}
-	if token == "" {
-		return ErrUnauthorized
-	}
-	playerID, err := m.store.Authenticate(ctx, code, HashToken(token), m.clock.Now())
+	code, playerID, roomID, err := m.authenticate(ctx, rawCode, token)
 	if err != nil {
 		return err
 	}
+	return m.onActor(ctx, code, roomID, func(a *actor) error { return fn(a, playerID) })
+}
 
+// onActor runs fn on the room's actor, starting one if nobody is connected.
+func (m *Manager) onActor(ctx context.Context, code, roomID string, fn func(a *actor) error) error {
 	for range maxConnectAttempts {
-		a, err := m.actorFor(ctx, code)
+		a, err := m.actorFor(ctx, code, roomID)
 		if err != nil {
 			return err
 		}
-		err = a.call(func() error { return fn(a, playerID) })
+		err = a.call(func() error { return fn(a) })
 		if errors.Is(err, errActorStopped) {
 			continue
 		}
 		return err
 	}
 	return errActorStopped
-}
-
-// call runs fn on the actor and waits for its result. It returns errActorStopped when the actor
-// is gone.
-func (a *actor) call(fn func() error) error {
-	reply := make(chan error, 1)
-	if !a.do(func() { reply <- fn() }) {
-		return errActorStopped
-	}
-	return <-reply
 }
 
 func (a *actor) setAvatar(playerID string, image []byte) error {
