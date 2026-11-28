@@ -83,9 +83,13 @@ Done (leaving and vote changes): `leave_room`, `remove_player` and removal after
 (`internal/room/leave.go`, `players.left_at`, close code `4403`); votes confirmed with a button and
 changeable while the voting is open (`CastVote` upserts).
 
-Next step: the rest of slice 5: production origin and CORS, observability and deployment (TLS,
-reverse proxy, hosting headers of the web app). Real content (themes, words, questions) is still
-to be written.
+Deployment ready, not yet run on the VPS: `deploy/` holds the production stack for one Ubuntu
+VPS (Docker Compose: Traefik, web, api, postgres) behind Cloudflare, with its runbook in
+`deploy/README.md`. One origin (`/` web, `/api` and `/ws` API), so no CORS; only Cloudflare
+reaches the server (ufw, Traefik IP allow list, Authenticated Origin Pulls); Postgres over TLS
+with `sslmode=verify-full` and a private CA.
+
+Next step: the rest of slice 5: observability.
 
 ## Game rules (decided)
 
@@ -291,6 +295,10 @@ to be written.
   converts to the `room` types). Columns with a database default are tagged `nullzero`, so a
   zero value is written as `DEFAULT`; nullable columns are pointers.
 - The database enforces invariants whenever it can (see `docs/database.md`).
+- Themes in the shipped catalog: Comidas, Animais, Lugares, Profissões, Roupas e calçados, Filmes e séries (the
+  best-known titles, so the table recognizes them), Objetos da casa, Esportes, Música, Bebidas, and
+  Pessoas da sala (questions only, about habits, in "essa pessoa", playful but never about
+  appearance, health or sensitive topics).
 - Content lives in versioned JSON (`internal/content/data`), loaded by `cmd/seed`
   (idempotent upsert), separate from schema migrations.
 - Server authoritative: no rule runs on the client. Secrets (the word, who the impostor is)
@@ -320,7 +328,8 @@ internal/storage   PostgreSQL via bun: db, models, seed, repositories (rooms, li
 internal/content   embedded catalog (pt-BR) and validation
 internal/janitor   expired and empty rooms cleanup
 docs/              specification, architecture, database, protocol, adr/
-docker/            Postgres init scripts
+docker/            Postgres init scripts (development)
+deploy/            production stack: compose.yml, scripts/, runbook (README.md)
 ```
 
 Dependency direction: `httpapi` and `realtime` depend on `room`; `room` depends on `game` and
@@ -383,9 +392,9 @@ on small interfaces it defines itself; `storage` implements those interfaces. `g
 - `players.last_seen_at` is set on joining and never updated (presence lives in the actor).
 - Reveal confirmations ("Entendi") live in the actor's memory: if the room is reloaded during a
   reveal, players confirm again.
-- Real content: themes, words and 50 to 100 questions (`make seed ARGS=-release` enforces the
-  minimums; see `cmd/seed`).
-- Production deployment, observability. The reverse proxy must not log the query string of
-  `/ws/` (the token travels there) and must set `X-Forwarded-For` (with `TRUSTED_PROXIES`).
-- CORS in production: undecided; it depends on whether the web app is served from another origin
-  than the API.
+- Real content: the catalog has 10 word themes (about 25 words each) and the "Pessoas da sala"
+  theme, with 35+ questions per theme. Still to decide: more words and questions over time.
+  `make seed ARGS=-release` enforces the minimums, and a test checks the shipped catalog.
+- Observability (metrics, alerts). In production the logs are only `docker compose logs`.
+- The deploy keeps no database backups (decided: rooms last at most 24 hours, the catalog is in
+  the repo).

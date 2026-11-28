@@ -7,3 +7,4 @@ bin
 tmp
 docs
 coverage.out
+deploy

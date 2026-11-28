@@ -1,12 +1,789 @@
 {
   "questions": [
-    { "kind": "words", "themeSlug": "", "text": "Você levaria isso numa viagem?" },
-    { "kind": "words", "themeSlug": "", "text": "Isso costuma agradar a maioria das pessoas?" },
-    { "kind": "words", "themeSlug": "", "text": "Em que momento do dia você mais pensa nisso?" },
-    { "kind": "words", "themeSlug": "", "text": "Dá para encontrar isso perto da sua casa?" },
-    { "kind": "words", "themeSlug": "foods", "text": "Isso é mais doce ou mais salgado?" },
-    { "kind": "players", "themeSlug": "", "text": "Essa pessoa costuma chegar atrasada?" },
-    { "kind": "players", "themeSlug": "", "text": "Essa pessoa sobreviveria numa ilha deserta?" },
-    { "kind": "players", "themeSlug": "", "text": "Essa pessoa costuma exagerar nas histórias?" }
+    {
+      "kind": "words",
+      "themeSlug": "",
+      "text": "Você levaria isso numa viagem?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "",
+      "text": "Isso costuma agradar a maioria das pessoas?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "",
+      "text": "Em que momento do dia você mais pensa nisso?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "",
+      "text": "Dá para encontrar isso perto da sua casa?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "foods",
+      "text": "Isso é mais doce ou mais salgado?"
+    },
+    {
+      "kind": "players",
+      "themeSlug": "",
+      "text": "Essa pessoa costuma chegar atrasada?"
+    },
+    {
+      "kind": "players",
+      "themeSlug": "",
+      "text": "Essa pessoa sobreviveria numa ilha deserta?"
+    },
+    {
+      "kind": "players",
+      "themeSlug": "",
+      "text": "Essa pessoa costuma exagerar nas histórias?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "",
+      "text": "Isso combina mais com verão ou com inverno?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "",
+      "text": "Se isso fosse um animal, qual seria?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "",
+      "text": "Isso faz algum barulho?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "",
+      "text": "Você usaria isso num casamento?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "",
+      "text": "Isso é mais útil ou mais bonito?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "",
+      "text": "Dá para viver um mês sem isso?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "",
+      "text": "Isso tem cheiro de quê?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "",
+      "text": "Que cor isso teria se fosse uma emoção?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "",
+      "text": "Isso seria um bom presente para a sogra?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "",
+      "text": "Se isso fosse um personagem de desenho, quem seria?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "",
+      "text": "Isso deveria ter um dia só dele?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "",
+      "text": "Você teria medo disso no escuro?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "",
+      "text": "Isso é mais de criança ou de adulto?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "",
+      "text": "Isso é mais de festa ou de casa tranquila?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "",
+      "text": "Dá para fazer isso de pijama?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "",
+      "text": "Isso já foi moda? Vai voltar?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "",
+      "text": "Isso tem cara de domingo, de segunda ou de sexta?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "",
+      "text": "Se isso fosse um clima, qual seria?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "",
+      "text": "Você compraria isso na padaria da esquina ou numa loja de luxo?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "",
+      "text": "Se isso pudesse falar, o que diria primeiro?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "",
+      "text": "Isso é mais de ver ou de fazer?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "",
+      "text": "Qual é a versão ruim disso?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "",
+      "text": "Isso ficaria bem como tatuagem?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "",
+      "text": "Você daria isso de presente para quem menos gosta?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "",
+      "text": "Se você fechar os olhos, que gosto isso tem?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "foods",
+      "text": "Isso vai bem no café da manhã?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "foods",
+      "text": "Dá para comer isso com as mãos?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "foods",
+      "text": "Isso é mais de comida de rua ou de restaurante?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "foods",
+      "text": "Quem faz isso melhor: a avó ou um chef famoso?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "foods",
+      "text": "Isso sobra na geladeira ou acaba na hora?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "foods",
+      "text": "Você pediria isso num primeiro encontro?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "foods",
+      "text": "Isso faz você lembrar de alguma festa da infância?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "foods",
+      "text": "Dá para derrubar isso na roupa de festa?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "foods",
+      "text": "Isso é mais de jantar ou de lanche da madrugada?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "foods",
+      "text": "Qual molho combinaria com isso?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "animals",
+      "text": "Esse bicho sobreviveria a uma festa de aniversário?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "animals",
+      "text": "Esse animal seria um bom chefe?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "animals",
+      "text": "Esse bicho acordaria cedo ou dormiria até tarde?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "animals",
+      "text": "Esse animal seria um bom colega de trabalho?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "animals",
+      "text": "Esse bicho ganharia uma briga contra um gato?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "animals",
+      "text": "Esse animal seria melhor como pet ou no zoológico?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "animals",
+      "text": "Esse bicho sabe dançar?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "animals",
+      "text": "Esse animal ganharia um concurso de beleza?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "animals",
+      "text": "Esse bicho seria o mais barulhento da casa?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "animals",
+      "text": "Esse animal reclamaria da comida do jantar?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "places",
+      "text": "Quem vai mais a esse lugar: os jovens ou os mais velhos?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "places",
+      "text": "Dá para passar uma tarde inteira aqui sem fazer nada?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "places",
+      "text": "Esse lugar tem cheiro de quê?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "places",
+      "text": "Qual é a trilha sonora perfeita para esse lugar?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "places",
+      "text": "O que você levaria escondido nesse lugar?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "places",
+      "text": "Esse lugar é melhor de dia ou de noite?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "places",
+      "text": "Quem é mais provável de se perder aqui?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "places",
+      "text": "Esse lugar combina com um primeiro encontro?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "places",
+      "text": "O que não pode faltar na mochila para ir a esse lugar?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "places",
+      "text": "Em qual desses lugares você mais pensaria em tirar um cochilo?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "professions",
+      "text": "Qual pessoa da sala você chamaria numa emergência dessa profissão?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "professions",
+      "text": "Essa profissão daria um bom programa de TV?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "professions",
+      "text": "Quem tem cara de ser bom nessa profissão?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "professions",
+      "text": "Qual é a parte mais chata dessa profissão?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "professions",
+      "text": "Quem faria um vilão melhor com essa profissão?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "professions",
+      "text": "Essa profissão exige mais paciência ou coragem?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "professions",
+      "text": "Quanto tempo você aguentaria trabalhando nisso?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "professions",
+      "text": "Essa profissão é mais de manhã cedo ou de madrugada?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "professions",
+      "text": "Qual filme mostraria essa profissão de forma mais fiel?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "professions",
+      "text": "O que quem tem essa profissão nunca conta numa festa?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "movies-series",
+      "text": "Qual personagem desse título seria o melhor amigo para uma viagem?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "movies-series",
+      "text": "Esse título merece uma continuação ou já está bom assim?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "movies-series",
+      "text": "Quem da sala se acha o protagonista desse título?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "movies-series",
+      "text": "Qual cena desse título você sabe de cor?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "movies-series",
+      "text": "Esse título ganharia o Oscar de melhor trilha sonora?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "movies-series",
+      "text": "Quem da sala faria o vilão dessa história?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "movies-series",
+      "text": "Qual é a melhor fala desse título?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "movies-series",
+      "text": "Você assistiria de novo sem pensar duas vezes?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "movies-series",
+      "text": "Esse título é mais de maratona ou de um filme só?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "movies-series",
+      "text": "Qual personagem desse título você seria num grupo de amigos?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "household",
+      "text": "Isso tem lugar certo na casa ou fica jogado por aí?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "household",
+      "text": "Quem da sala demora mais tempo para usar isso?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "household",
+      "text": "Isso já quebrou na sua casa de um jeito engraçado?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "household",
+      "text": "Você deixaria isso na casa de um amigo sem avisar?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "household",
+      "text": "Isso faz barulho de madrugada?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "household",
+      "text": "Isso é mais de sala ou de quarto?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "household",
+      "text": "Quem da sala brigaria para ficar com isso?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "household",
+      "text": "Isso sobrevive a uma mudança de casa?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "household",
+      "text": "O que dá para fazer com isso se faltar luz?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "household",
+      "text": "Isso deveria vir com manual de instruções?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "sports",
+      "text": "Quem da sala seria o pior nesse esporte?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "sports",
+      "text": "Esse esporte cansa mais o corpo ou a paciência?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "sports",
+      "text": "Quem ficaria mais tempo de pé assistindo a esse esporte?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "sports",
+      "text": "Esse esporte daria uma boa aposta de churrasco?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "sports",
+      "text": "Qual equipamento desse esporte seria o mais caro?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "sports",
+      "text": "Quem da sala você colocaria no time desse esporte?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "sports",
+      "text": "Esse esporte é mais de celular ou de estádio?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "sports",
+      "text": "Qual é o palpite mais ousado para esse esporte?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "sports",
+      "text": "Quem traria o uniforme mais ridículo para esse esporte?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "sports",
+      "text": "Qual é a melhor torcida desse esporte?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "music",
+      "text": "Qual festa combinaria com essa música?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "music",
+      "text": "Quem da sala cantaria isso no chuveiro?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "music",
+      "text": "Essa música toca em qual momento do dia?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "music",
+      "text": "Essa música seria a trilha de um filme de terror ou de comédia?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "music",
+      "text": "Quem da sala dança isso sem vergonha?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "music",
+      "text": "Essa música ainda toca nos aniversários?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "music",
+      "text": "Essa música tem refrão que gruda na cabeça?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "music",
+      "text": "Quem da sala pediria essa música no karaokê?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "music",
+      "text": "Essa música faz você lembrar de algum verão?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "music",
+      "text": "Quem da sala conhece a letra inteira sem nunca ter ouvido de propósito?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "drinks",
+      "text": "Essa bebida combina com qual comida?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "drinks",
+      "text": "Quem da sala pede isso sem nem olhar o cardápio?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "drinks",
+      "text": "Essa bebida é mais de domingo ou de sexta?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "drinks",
+      "text": "Essa bebida daria um bom nome de cachorro?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "drinks",
+      "text": "Quem da sala deixa isso gelar até o último segundo?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "drinks",
+      "text": "Essa bebida é mais de festa ou de tarde tranquila?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "drinks",
+      "text": "Qual copo seria o ideal para isso?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "drinks",
+      "text": "Quem da sala mais tomaria isso num churrasco?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "drinks",
+      "text": "Essa bebida tem gosto de qual infância?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "drinks",
+      "text": "Essa bebida funcionaria num encontro às 8 da manhã?"
+    },
+    {
+      "kind": "players",
+      "themeSlug": "players",
+      "text": "Essa pessoa é mais de planejar a viagem ou de ir na hora?"
+    },
+    {
+      "kind": "players",
+      "themeSlug": "players",
+      "text": "Essa pessoa já mandou mensagem para o grupo errado?"
+    },
+    {
+      "kind": "players",
+      "themeSlug": "players",
+      "text": "Essa pessoa é quem sempre paga o café do grupo?"
+    },
+    {
+      "kind": "players",
+      "themeSlug": "players",
+      "text": "Essa pessoa é a que mais fala durante um filme?"
+    },
+    {
+      "kind": "players",
+      "themeSlug": "players",
+      "text": "Essa pessoa costuma responder mensagem só no dia seguinte?"
+    },
+    {
+      "kind": "players",
+      "themeSlug": "players",
+      "text": "Essa pessoa é a primeira a dizer que está cansada e a última a ir embora?"
+    },
+    {
+      "kind": "players",
+      "themeSlug": "players",
+      "text": "Essa pessoa fica irritada quando está com fome?"
+    },
+    {
+      "kind": "players",
+      "themeSlug": "players",
+      "text": "Essa pessoa cozinha melhor do que diz?"
+    },
+    {
+      "kind": "players",
+      "themeSlug": "players",
+      "text": "Essa pessoa já esqueceu o aniversário de alguém do grupo?"
+    },
+    {
+      "kind": "players",
+      "themeSlug": "players",
+      "text": "Essa pessoa é mais de cantar no karaokê ou de só assistir?"
+    },
+    {
+      "kind": "players",
+      "themeSlug": "players",
+      "text": "Essa pessoa levaria um guarda-chuva que nunca usa, por precaução?"
+    },
+    {
+      "kind": "players",
+      "themeSlug": "players",
+      "text": "Essa pessoa é quem sempre escolhe o restaurante, ou quem sempre deixa os outros escolherem?"
+    },
+    {
+      "kind": "players",
+      "themeSlug": "players",
+      "text": "Essa pessoa conseguiria ficar um dia inteiro sem o celular?"
+    },
+    {
+      "kind": "players",
+      "themeSlug": "players",
+      "text": "Essa pessoa já dormiu numa festa e acordou sem lembrar como chegou em casa?"
+    },
+    {
+      "kind": "players",
+      "themeSlug": "players",
+      "text": "Essa pessoa lê o contrato inteiro antes de assinar, ou assina e pronto?"
+    },
+    {
+      "kind": "players",
+      "themeSlug": "players",
+      "text": "Essa pessoa já inventou uma desculpa estranha para não ir a um evento?"
+    },
+    {
+      "kind": "players",
+      "themeSlug": "players",
+      "text": "Essa pessoa seria a primeira a ser eliminada de um reality show?"
+    },
+    {
+      "kind": "players",
+      "themeSlug": "players",
+      "text": "Essa pessoa costuma se perder em caminhos que já fez várias vezes?"
+    },
+    {
+      "kind": "players",
+      "themeSlug": "players",
+      "text": "Essa pessoa teria coragem de cantar parabéns para um desconhecido no metrô?"
+    },
+    {
+      "kind": "players",
+      "themeSlug": "players",
+      "text": "Essa pessoa demora mais para escolher um filme ou para escolher o pedido?"
+    },
+    {
+      "kind": "players",
+      "themeSlug": "players",
+      "text": "Essa pessoa é quem reúne o grupo quando todo mundo some?"
+    },
+    {
+      "kind": "players",
+      "themeSlug": "players",
+      "text": "Essa pessoa já passou vergonha por alguma coisa que disse em público?"
+    },
+    {
+      "kind": "players",
+      "themeSlug": "players",
+      "text": "Essa pessoa é a primeira que você chamaria para resolver um problema às 3 da manhã?"
+    },
+    {
+      "kind": "players",
+      "themeSlug": "players",
+      "text": "Essa pessoa tem alguma mania engraçada na hora de se despedir?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "clothing",
+      "text": "Isso é mais de ir ao trabalho ou de ir a uma festa?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "clothing",
+      "text": "Dá para usar isso num casamento sem ser mal-visto?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "clothing",
+      "text": "Quem da sala compraria isso sem provar?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "clothing",
+      "text": "Isso tem cara de coisa que você nunca vai devolver à loja?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "clothing",
+      "text": "Quem da sala mais usaria isso numa festa à fantasia?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "clothing",
+      "text": "Isso aguentaria uma chuva forte sem reclamar?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "clothing",
+      "text": "Isso é mais de inverno, de verão ou de meia-estação?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "clothing",
+      "text": "Quem da sala esquece isso no lugar onde tirou?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "clothing",
+      "text": "Isso ficaria bem numa entrevista de emprego?"
+    },
+    {
+      "kind": "words",
+      "themeSlug": "clothing",
+      "text": "Isso é mais de passeio no shopping ou de caminhada na praia?"
+    }
   ]
 }

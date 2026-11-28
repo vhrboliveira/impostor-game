@@ -35,6 +35,15 @@ func TestLoad_EmbeddedCatalogIsValid(t *testing.T) {
 	require.NoError(t, catalog.Validate())
 }
 
+// The shipped catalog must meet the release minimums (enough questions per theme), so it is
+// never published short of content.
+func TestLoad_EmbeddedCatalogIsReadyForRelease(t *testing.T) {
+	catalog, err := Load()
+	require.NoError(t, err)
+
+	require.NoError(t, catalog.ValidateForRelease())
+}
+
 func TestLoad_RejectsUnknownFields(t *testing.T) {
 	fsys := fstest.MapFS{
 		"data/themes.json":    {Data: []byte(`{"themes":[{"slug":"x","nam":"typo"}]}`)},

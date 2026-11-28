@@ -220,6 +220,9 @@ too (`docker buildx imagetools inspect <image:tag>`).
 
 ### Production checklist
 
+The production stack (Cloudflare, Traefik, web, API, Postgres on one VPS) and its step-by-step
+runbook are in [`deploy/README.md`](deploy/README.md); it already covers the items below.
+
 - `APP_ENV=prod` (it refuses `LOG_LEVEL=debug`), `ALLOWED_ORIGINS` with only the production
   origin, and `DATABASE_URL` with `sslmode=verify-full` (anything else logs a warning).
 - Behind a reverse proxy, set `TRUSTED_PROXIES` (its IPs or CIDRs) so the rate limits see the
