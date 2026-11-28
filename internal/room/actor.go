@@ -1,7 +1,9 @@
 package room
 
 import (
+	"errors"
 	"log/slog"
+	"runtime/debug"
 	"time"
 
 	"github.com/vhrboliveira/impostor-game/internal/game"
@@ -19,9 +21,11 @@ type actor struct {
 	done    chan struct{}
 	stopped bool
 
-	// conns holds the open connections per player id. A player with several tabs or a
-	// reconnect racing a stale socket has more than one.
-	conns map[string]map[Client]struct{}
+	// conns holds the open connections per player id, each with its connection order. A player
+	// with several tabs or a reconnect racing a stale socket has more than one (at most
+	// maxConnsPerPlayer).
+	conns   map[string]map[Client]uint64
+	connSeq uint64
 
 	idle      timer
 	expiry    timer
@@ -30,6 +34,11 @@ type actor struct {
 	phaseTimer timer
 	// hostGraceOver is set when the host has been offline for the whole grace period.
 	hostGraceOver bool
+	// offline holds the countdown of each player offline, after which they are removed.
+	offline map[string]*timer
+
+	// marked holds the players whose first connection this actor already recorded.
+	marked map[string]bool
 
 	// confirmed holds who tapped "Entendi" during the reveal. It lives in memory only: after a
 	// reload the players confirm again.
@@ -57,12 +66,13 @@ func (t *timer) cancel() {
 
 func newActor(m *Manager, state RoomState) *actor {
 	return &actor{
-		m:     m,
-		state: state,
-		cmds:  make(chan func()),
-		done:  make(chan struct{}),
-		conns: make(map[string]map[Client]struct{}),
-		rng:   m.newRand(),
+		m:      m,
+		state:  state,
+		cmds:   make(chan func()),
+		done:   make(chan struct{}),
+		conns:  make(map[string]map[Client]uint64),
+		marked: make(map[string]bool),
+		rng:    m.newRand(),
 	}
 }
 
@@ -71,12 +81,36 @@ func (a *actor) run() {
 	a.arm(&a.expiry, a.state.ExpiresAt.Sub(a.m.clock.Now()), a.expire)
 	// Normally cancelled right away by the first connection.
 	a.arm(&a.idle, a.m.cfg.IdleTimeout, a.stopIfIdle)
-	a.resumeRound()
+	a.exec(a.resumeRound)
+	a.exec(a.armOfflineRemovals)
 
 	for !a.stopped {
-		cmd := <-a.cmds
-		cmd()
+		a.exec(<-a.cmds)
 	}
+}
+
+// exec runs one command. A panic stops this room only: it is logged with its stack, the room's
+// connections are closed with CloseInternalError (the clients reconnect, which loads the room
+// again from the database) and the actor stops, so the process and the other rooms keep running.
+func (a *actor) exec(cmd func()) {
+	defer func() {
+		r := recover()
+		if r == nil {
+			return
+		}
+		a.m.logger.Error("room actor panic", slog.String("room", a.state.Code),
+			slog.Any("panic", r), slog.String("stack", string(debug.Stack())))
+		for _, clients := range a.conns {
+			for c := range clients {
+				c.Close(protocol.CloseInternalError, "internal error")
+			}
+		}
+		a.conns = make(map[string]map[Client]uint64)
+		if !a.stopped {
+			a.stop()
+		}
+	}()
+	cmd()
 }
 
 // do queues a command. It returns false when the actor has stopped.
@@ -110,17 +144,36 @@ func (a *actor) stop() {
 	a.expiry.cancel()
 	a.hostGrace.cancel()
 	a.phaseTimer.cancel()
+	for _, t := range a.offline {
+		t.cancel()
+	}
 	a.m.remove(a)
 	close(a.done)
 }
 
 // connect attaches a client. It returns errActorStopped when the actor is gone.
 func (a *actor) connect(playerID string, c Client) error {
+	return a.call(func() error { return a.handleConnect(playerID, c) })
+}
+
+// call runs fn on the actor and waits for its result. It returns errActorStopped when the actor
+// is gone, including when fn panicked and stopped it before replying.
+func (a *actor) call(fn func() error) error {
 	reply := make(chan error, 1)
-	if !a.do(func() { reply <- a.handleConnect(playerID, c) }) {
+	if !a.do(func() { reply <- fn() }) {
 		return errActorStopped
 	}
-	return <-reply
+	select {
+	case err := <-reply:
+		return err
+	case <-a.done:
+		select {
+		case err := <-reply:
+			return err
+		default:
+			return errActorStopped
+		}
+	}
 }
 
 func (a *actor) handleConnect(playerID string, c Client) error {
@@ -133,20 +186,55 @@ func (a *actor) handleConnect(playerID string, c Client) error {
 			return ErrUnauthorized
 		}
 	}
-
-	wasEmpty := len(a.conns) == 0
-	if a.conns[playerID] == nil {
-		a.conns[playerID] = make(map[Client]struct{})
+	if !a.player(playerID).Active() {
+		return ErrUnauthorized // removed between the token check and this connection
 	}
-	a.conns[playerID][c] = struct{}{}
+	a.cancelOfflineRemoval(playerID)
+
+	if a.conns[playerID] == nil {
+		a.conns[playerID] = make(map[Client]uint64)
+	}
+	if len(a.conns[playerID]) >= maxConnsPerPlayer {
+		a.dropOldestConn(playerID)
+	}
+	a.connSeq++
+	a.conns[playerID][c] = a.connSeq
 
 	a.idle.cancel()
-	if wasEmpty {
-		a.markOccupied()
+	if !a.marked[playerID] {
+		ctx, cancel := storeContext()
+		if err := a.m.store.MarkConnected(ctx, playerID, a.m.clock.Now()); err != nil {
+			a.logError("mark player connected", err) // retried on the next connection
+		} else {
+			a.marked[playerID] = true
+		}
+		cancel()
+	}
+	// On every connection, not only the first: a clear that failed earlier is retried (it is a
+	// no-op once the marker is clear).
+	if err := a.markOccupied(); errors.Is(err, ErrRoomNotFound) {
+		a.expire() // the janitor deleted the room under this actor
+		return nil
 	}
 	a.reviewHost()
 	a.broadcast()
 	return nil
+}
+
+// dropOldestConn closes the player's oldest connection to make room for a new one. It is removed
+// right away; its Leave finds nothing to do.
+func (a *actor) dropOldestConn(playerID string) {
+	var (
+		oldest Client
+		seq    uint64
+	)
+	for c, s := range a.conns[playerID] {
+		if oldest == nil || s < seq {
+			oldest, seq = c, s
+		}
+	}
+	delete(a.conns[playerID], oldest)
+	oldest.Close(protocol.ClosePolicyViolation, "too many connections")
 }
 
 func (a *actor) handleDisconnect(playerID string, c Client) {
@@ -157,10 +245,14 @@ func (a *actor) handleDisconnect(playerID string, c Client) {
 	delete(clients, c)
 	if len(clients) == 0 {
 		delete(a.conns, playerID)
+		a.armOfflineRemoval(playerID)
 	}
 
 	if len(a.conns) == 0 {
-		a.markEmpty()
+		if err := a.markEmpty(); errors.Is(err, ErrRoomNotFound) {
+			a.stop() // the janitor deleted the room under this actor
+			return
+		}
 		a.arm(&a.idle, a.m.cfg.IdleTimeout, a.stopIfIdle)
 	}
 	a.reviewHost()
@@ -198,6 +290,10 @@ func (a *actor) handleMessage(playerID string, c Client, msg protocol.ClientMess
 		a.endMatch(playerID, c)
 	case protocol.TypePlayAgain:
 		a.playAgain(playerID, c, msg.PlayAgain)
+	case protocol.TypeLeaveRoom:
+		a.leaveRoom(playerID)
+	case protocol.TypeRemovePlayer:
+		a.removeByHost(playerID, c, msg.Remove)
 	default:
 		// ping is answered by the transport; nothing else reaches here.
 		c.Send(protocol.ErrorMessage(protocol.ErrCodeInvalidMessage))
@@ -291,37 +387,51 @@ func (a *actor) transferHost() {
 	a.m.logger.Info("host transferred", slog.String("room", a.state.Code), slog.String("player_id", next.ID))
 }
 
-// markOccupied clears empty_since when the first player connects.
-func (a *actor) markOccupied() {
+// markOccupied clears empty_since while someone is connected. A failure leaves the marker set
+// (the next connection retries); ErrRoomNotFound means the room is gone.
+func (a *actor) markOccupied() error {
 	if a.state.EmptySince == nil {
-		return
+		return nil
 	}
 	ctx, cancel := storeContext()
 	defer cancel()
 	if err := a.m.store.SetEmptySince(ctx, a.state.RoomID, nil); err != nil {
 		a.logError("clear empty_since", err)
-		return
+		return err
 	}
 	a.state.EmptySince = nil
+	return nil
 }
 
 // markEmpty records when the last player left, so the janitor deletes the room after
-// EMPTY_ROOM_TTL.
-func (a *actor) markEmpty() {
+// EMPTY_ROOM_TTL. A failure leaves state.EmptySince nil, so stopIfIdle retries it.
+func (a *actor) markEmpty() error {
 	now := a.m.clock.Now()
 	ctx, cancel := storeContext()
 	defer cancel()
 	if err := a.m.store.SetEmptySince(ctx, a.state.RoomID, &now); err != nil {
 		a.logError("set empty_since", err)
-		return
+		return err
 	}
 	a.state.EmptySince = &now
+	return nil
 }
 
+// stopIfIdle stops the actor once nobody is connected. It never leaves the room marked occupied:
+// an actor started only by a REST call (after a restart, the stored marker may be stale) or whose
+// last markEmpty failed writes the marker first, and waits another idle period if that fails.
 func (a *actor) stopIfIdle() {
-	if len(a.conns) == 0 {
-		a.stop()
+	if len(a.conns) > 0 {
+		return
 	}
+	if a.state.EmptySince == nil {
+		err := a.markEmpty()
+		if err != nil && !errors.Is(err, ErrRoomNotFound) {
+			a.arm(&a.idle, a.m.cfg.IdleTimeout, a.stopIfIdle)
+			return
+		}
+	}
+	a.stop()
 }
 
 // expire closes every connection with CloseRoomNotFound: the room reached its maximum lifetime
@@ -332,7 +442,7 @@ func (a *actor) expire() {
 			c.Close(protocol.CloseRoomNotFound, "room expired")
 		}
 	}
-	a.conns = make(map[string]map[Client]struct{})
+	a.conns = make(map[string]map[Client]uint64)
 	a.stop()
 }
 
@@ -344,6 +454,7 @@ func (a *actor) reloadPlayers() error {
 		return err
 	}
 	a.state.Players = players
+	a.armOfflineRemovals()
 	return nil
 }
 

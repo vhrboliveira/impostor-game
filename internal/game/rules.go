@@ -30,6 +30,13 @@ const (
 	// GuessOptions is how many options the impostor picks from (the secret among them). Fewer
 	// when the theme has fewer words or the round fewer players.
 	GuessOptions = 8
+	// MinGuessWords is the fewest unused words a words theme needs to feed a round. The guess
+	// options come from the same unused words, so with fewer the found impostor's guess would
+	// narrow down to the secret.
+	MinGuessWords = 4
+	// SeatHoldTime is how long a player who joined but never opened the room (no WebSocket yet)
+	// holds a seat against MaxPlayers.
+	SeatHoldTime = 2 * time.Minute
 )
 
 // Points awarded at the end of a round.

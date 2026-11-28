@@ -15,8 +15,12 @@ type errorBody struct {
 	Code string `json:"code"`
 }
 
+// writeJSON writes a JSON response. It is never cached (the create and join responses carry the
+// session token) nor sniffed as another type.
 func writeJSON(w http.ResponseWriter, status int, body any) {
 	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Cache-Control", "no-store")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(body)
 }

@@ -1,5 +1,10 @@
-# Load .env when present (plain KEY=value lines only) and export it to every command.
+# Load .env when present (plain KEY=value lines only) and export it to every command. A variable
+# already set in the shell wins over .env (LOG_LEVEL=info make run): make would otherwise let the
+# included file override it.
+ENV_FILE_VARS := $(shell sed -n 's/^\([A-Za-z_][A-Za-z0-9_]*\)=.*/\1/p' .env 2>/dev/null)
+$(foreach v,$(ENV_FILE_VARS),$(if $(filter environment,$(origin $(v))),$(eval SHELL_ENV_$(v) := $(value $(v)))))
 -include .env
+$(foreach v,$(ENV_FILE_VARS),$(if $(SHELL_ENV_$(v)),$(eval $(v) := $(SHELL_ENV_$(v)))))
 export
 
 GO           ?= go

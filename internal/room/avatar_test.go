@@ -215,11 +215,57 @@ func TestSetAvatar_Errors(t *testing.T) {
 	jpg := encodeJPEG(t, photo(64, 64))
 
 	assert.ErrorIs(t, h.m.SetAvatar(context.Background(), "K7M2P", "t-ana", []byte("nope")), ErrInvalidAvatar)
-	assert.ErrorIs(t, h.m.SetAvatar(context.Background(), "K7", "t-ana", jpg), ErrRoomNotFound)
-	assert.ErrorIs(t, h.m.SetAvatar(context.Background(), "ZZZZZ", "t-ana", jpg), ErrRoomNotFound)
+	// A caller without a valid token learns nothing about the room: no existence oracle.
+	assert.ErrorIs(t, h.m.SetAvatar(context.Background(), "K7", "t-ana", jpg), ErrUnauthorized)
+	assert.ErrorIs(t, h.m.SetAvatar(context.Background(), "ZZZZZ", "t-ana", jpg), ErrUnauthorized)
+	assert.ErrorIs(t, h.m.DeleteAvatar(context.Background(), "ZZZZZ", "t-ana"), ErrUnauthorized)
 	assert.ErrorIs(t, h.m.SetAvatar(context.Background(), "K7M2P", "", jpg), ErrUnauthorized)
 	assert.ErrorIs(t, h.m.SetAvatar(context.Background(), "K7M2P", "t-wrong", jpg), ErrUnauthorized)
 	assert.ErrorIs(t, h.m.DeleteAvatar(context.Background(), "K7M2P", "t-wrong"), ErrUnauthorized)
+	// The token is checked before the image is decoded: an anonymous upload costs no decoding.
+	assert.ErrorIs(t, h.m.SetAvatar(context.Background(), "K7M2P", "t-wrong", []byte("nope")), ErrUnauthorized)
+}
+
+// progressiveJPEG builds a valid 768x768 grayscale progressive JPEG made of n identical AC
+// refinement scans. Each 12-byte scan walks every block of the image, so decoding cost grows with
+// n while the file stays tiny.
+func progressiveJPEG(n int) []byte {
+	b := []byte{0xFF, 0xD8} // SOI
+	b = append(b, 0xFF, 0xDB, 0x00, 0x43, 0x00)
+	b = append(b, bytes.Repeat([]byte{0x01}, 64)...)                                            // DQT
+	b = append(b, 0xFF, 0xC2, 0x00, 0x0B, 0x08, 0x03, 0x00, 0x03, 0x00, 0x01, 0x01, 0x11, 0x00) // SOF2 768x768
+	b = append(b, 0xFF, 0xC4, 0x00, 0x14, 0x10, 0x01)
+	b = append(b, make([]byte, 15)...)
+	b = append(b, 0xE0) // DHT: one AC code for an end-of-band run
+	for range n {
+		b = append(b, 0xFF, 0xDA, 0x00, 0x08, 0x01, 0x01, 0x00, 0x01, 0x3F, 0x10, 0x7F, 0xFD)
+	}
+	return append(b, 0xFF, 0xD9) // EOI
+}
+
+// Decoding cost grows with the number of progressive scans, not only with the pixels: a JPEG
+// with more scans than any real encoder writes is refused before it is decoded.
+func TestNormalizeAvatar_RejectsTooManyJPEGScans(t *testing.T) {
+	_, err := NormalizeAvatar(progressiveJPEG(10))
+	require.NoError(t, err, "a progressive JPEG with a normal number of scans is fine")
+
+	start := time.Now()
+	_, err = NormalizeAvatar(progressiveJPEG(maxJPEGScans + 1))
+	assert.ErrorIs(t, err, ErrInvalidAvatar)
+	assert.Less(t, time.Since(start), 50*time.Millisecond, "refused without decoding")
+}
+
+// Decoding runs under a process-wide limit and gives up when the request goes away.
+func TestSetAvatar_DecodesUnderAConcurrencyLimit(t *testing.T) {
+	h := newHarness(t)
+	for range cap(h.m.avatarSlots) {
+		h.m.avatarSlots <- struct{}{}
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	err := h.m.SetAvatar(ctx, "K7M2P", "t-ana", encodeJPEG(t, photo(64, 64)))
+	assert.ErrorIs(t, err, context.DeadlineExceeded)
 }
 
 func TestAvatar_ValidatesTheIDsBeforeTheStore(t *testing.T) {

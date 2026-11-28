@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"golang.org/x/time/rate"
 
 	"github.com/vhrboliveira/impostor-game/internal/protocol"
 	"github.com/vhrboliveira/impostor-game/internal/room"
@@ -22,8 +23,16 @@ const (
 	idleTimeout = 60 * time.Second
 	// writeTimeout bounds each message written to a connection.
 	writeTimeout = 10 * time.Second
-	// outboundBuffer is how many messages may wait for a slow connection before it is closed.
+	// outboundBuffer is how many messages other than snapshots (errors, pongs) may wait for a slow
+	// connection before it is closed. Snapshots never queue up: the newest replaces the unsent one.
 	outboundBuffer = 32
+	// messageRate and messageBurst bound what one connection may send: the web app sends a ping
+	// every 25 seconds and a command per tap. A connection over the limit is closed with 1008.
+	messageRate  = rate.Limit(10)
+	messageBurst = 30
+	// defaultConnectTimeout bounds the authentication and room load of a handshake. After the
+	// upgrade, net/http no longer cancels the request context when the client goes away.
+	defaultConnectTimeout = 10 * time.Second
 )
 
 // Session is a player's connection inside a room. *room.Conn implements it.
@@ -61,6 +70,8 @@ type Handler struct {
 
 	// conns tracks open connections: http.Server.Shutdown does not wait for hijacked ones.
 	conns sync.WaitGroup
+
+	connectTimeout time.Duration
 }
 
 // NewHandler creates the WebSocket handler. Connections are closed with 1001 (going away) when
@@ -70,7 +81,7 @@ func NewHandler(rooms Connector, logger *slog.Logger, allowedOrigins []string, s
 	for _, origin := range allowedOrigins {
 		allowed[normalizeOrigin(origin)] = struct{}{}
 	}
-	return &Handler{rooms: rooms, logger: logger, allowedOrigins: allowed, shutdown: shutdown}
+	return &Handler{rooms: rooms, logger: logger, allowedOrigins: allowed, shutdown: shutdown, connectTimeout: defaultConnectTimeout}
 }
 
 func normalizeOrigin(origin string) string {
@@ -104,7 +115,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	client := newClient()
-	session, err := h.rooms.Connect(ctx, r.PathValue("code"), r.URL.Query().Get("token"), client)
+	connectCtx, cancelConnect := context.WithTimeout(ctx, h.connectTimeout)
+	session, err := h.rooms.Connect(connectCtx, r.PathValue("code"), r.URL.Query().Get("token"), client)
+	cancelConnect()
 	switch {
 	case errors.Is(err, room.ErrRoomNotFound):
 		_ = ws.Close(protocol.CloseRoomNotFound, "room not found")
@@ -126,7 +139,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.writeLoop(ctx, ws, client)
 	}()
 
-	h.readLoop(ctx, ws, client, session)
+	if h.readLoop(ctx, ws, client, session) {
+		<-writerDone // let the write loop send the close frame the reader asked for
+	}
 	cancel()
 	<-writerDone
 }
@@ -147,15 +162,21 @@ func (h *Handler) Wait(ctx context.Context) error {
 	}
 }
 
-// readLoop decodes messages until the connection closes or stays idle for too long. Pings are
-// answered here; everything else goes to the room.
-func (h *Handler) readLoop(ctx context.Context, ws *websocket.Conn, c *client, session Session) {
+// readLoop decodes messages until the connection closes, stays idle for too long or sends faster
+// than messageRate. Pings are answered here; everything else goes to the room. It reports whether
+// it asked the write loop to close the connection.
+func (h *Handler) readLoop(ctx context.Context, ws *websocket.Conn, c *client, session Session) bool {
+	limiter := rate.NewLimiter(messageRate, messageBurst)
 	for {
 		readCtx, cancel := context.WithTimeout(ctx, idleTimeout)
 		typ, data, err := ws.Read(readCtx)
 		cancel()
 		if err != nil {
-			return
+			return false
+		}
+		if !limiter.Allow() {
+			c.Close(protocol.ClosePolicyViolation, "too many messages")
+			return true
 		}
 
 		if typ != websocket.MessageText {
@@ -181,15 +202,12 @@ func (h *Handler) writeLoop(ctx context.Context, ws *websocket.Conn, c *client) 
 	for {
 		select {
 		case msg := <-c.out:
-			data, err := json.Marshal(msg)
-			if err != nil {
-				h.logger.Error("encode websocket message", slog.String("type", msg.Type), slog.Any("error", err))
-				continue
+			if !h.write(ctx, ws, msg) {
+				return
 			}
-			writeCtx, cancel := context.WithTimeout(ctx, writeTimeout)
-			err = ws.Write(writeCtx, websocket.MessageText, data)
-			cancel()
-			if err != nil {
+
+		case <-c.snapshotReady:
+			if msg, ok := c.takeSnapshot(); ok && !h.write(ctx, ws, msg) {
 				return
 			}
 
@@ -207,6 +225,18 @@ func (h *Handler) writeLoop(ctx context.Context, ws *websocket.Conn, c *client) 
 	}
 }
 
+// write encodes and writes one message. It reports false when the connection is gone.
+func (h *Handler) write(ctx context.Context, ws *websocket.Conn, msg protocol.ServerMessage) bool {
+	data, err := json.Marshal(msg)
+	if err != nil {
+		h.logger.Error("encode websocket message", slog.String("type", msg.Type), slog.Any("error", err))
+		return true
+	}
+	writeCtx, cancel := context.WithTimeout(ctx, writeTimeout)
+	defer cancel()
+	return ws.Write(writeCtx, websocket.MessageText, data) == nil
+}
+
 type closeFrame struct {
 	code   int
 	reason string
@@ -217,23 +247,54 @@ type client struct {
 	out       chan protocol.ServerMessage
 	closeReq  chan closeFrame
 	closeOnce sync.Once
+
+	// snapshot is the newest snapshot not written yet. A snapshot carries the whole room state, so
+	// a newer one replaces it: bursts of room changes never fill the buffer of a healthy
+	// connection. snapshotReady (capacity 1) wakes the write loop.
+	mu            sync.Mutex
+	snapshot      *protocol.ServerMessage
+	snapshotReady chan struct{}
 }
 
 func newClient() *client {
 	return &client{
-		out:      make(chan protocol.ServerMessage, outboundBuffer),
-		closeReq: make(chan closeFrame, 1),
+		out:           make(chan protocol.ServerMessage, outboundBuffer),
+		closeReq:      make(chan closeFrame, 1),
+		snapshotReady: make(chan struct{}, 1),
 	}
 }
 
-// Send queues a message. When the connection is too slow to drain its buffer it is closed; the
-// player reconnects and receives a fresh snapshot.
+// Send queues a message. A snapshot replaces the unsent one. Other messages queue up; when the
+// connection is too slow to drain them it is closed, and the player reconnects and receives a
+// fresh snapshot.
 func (c *client) Send(msg protocol.ServerMessage) {
+	if msg.Type == protocol.TypeRoomSnapshot {
+		c.mu.Lock()
+		c.snapshot = &msg
+		c.mu.Unlock()
+		select {
+		case c.snapshotReady <- struct{}{}:
+		default: // the write loop is already woken
+		}
+		return
+	}
 	select {
 	case c.out <- msg:
 	default:
 		c.Close(int(websocket.StatusTryAgainLater), "connection too slow")
 	}
+}
+
+// takeSnapshot returns the pending snapshot, if any, and clears it.
+func (c *client) takeSnapshot() (protocol.ServerMessage, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.snapshot == nil {
+		return protocol.ServerMessage{}, false
+	}
+	msg := *c.snapshot
+	c.snapshot = nil
+	return msg, true
 }
 
 // Close asks the write loop to close the connection with the given code.

@@ -2,6 +2,7 @@ package room
 
 import (
 	"context"
+	cryptorand "crypto/rand"
 	"errors"
 	"log/slog"
 	"math/rand/v2"
@@ -21,7 +22,12 @@ const (
 	DefaultIdleTimeout = 2 * time.Minute
 
 	// storeTimeout bounds each database call made by an actor.
-	storeTimeout       = 5 * time.Second
+	storeTimeout = 5 * time.Second
+	// storeRetryDelay is when a timer-driven transition whose database write failed is retried.
+	storeRetryDelay = 5 * time.Second
+	// maxConnsPerPlayer bounds the open connections of one player (tabs, a reconnect racing a
+	// stale socket). A new connection beyond it closes the player's oldest one.
+	maxConnsPerPlayer  = 4
 	maxConnectAttempts = 3
 )
 
@@ -34,6 +40,8 @@ type ManagerConfig struct {
 	HostGracePeriod    time.Duration
 	IdleTimeout        time.Duration
 	DiscussionDuration time.Duration
+	// OfflineRemoval is how long a player may stay offline before being removed from the room.
+	OfflineRemoval time.Duration
 }
 
 // Manager owns the active rooms: one actor goroutine per room with connected players. Actors
@@ -49,6 +57,9 @@ type Manager struct {
 
 	mu     sync.Mutex
 	actors map[string]*actor
+
+	// avatarSlots bounds concurrent photo decoding (avatarDecoders).
+	avatarSlots chan struct{}
 }
 
 // NewManager creates a Manager.
@@ -62,16 +73,24 @@ func NewManager(store LiveStore, logger *slog.Logger, cfg ManagerConfig) *Manage
 	if cfg.DiscussionDuration <= 0 {
 		cfg.DiscussionDuration = game.DiscussionDuration
 	}
+	if cfg.OfflineRemoval <= 0 {
+		cfg.OfflineRemoval = DefaultOfflineRemoval
+	}
 	return &Manager{
 		store:  store,
 		logger: logger,
 		clock:  systemClock{},
 		cfg:    cfg,
 		newRand: func() game.Rand {
-			// The top-level functions of math/rand/v2 are randomly seeded.
-			return rand.New(rand.NewPCG(rand.Uint64(), rand.Uint64()))
+			// The impostor and the secret are drawn from this stream, and its outputs are partly
+			// visible (the ring, the question order): use a cryptographic generator seeded from
+			// crypto/rand, whose Read never fails.
+			var seed [32]byte
+			_, _ = cryptorand.Read(seed[:])
+			return rand.New(rand.NewChaCha8(seed))
 		},
-		actors: make(map[string]*actor),
+		actors:      make(map[string]*actor),
+		avatarSlots: make(chan struct{}, avatarDecoders),
 	}
 }
 
@@ -98,23 +117,16 @@ func (s *Conn) Leave() {
 
 // Connect authenticates a player by the session token received when they created or joined the
 // room and attaches the client to the room's actor, which immediately sends it a snapshot.
-// It returns ErrRoomNotFound (unknown, malformed or expired code) or ErrUnauthorized.
+// It returns ErrUnauthorized when the token is not a player's of that room, whether or not the
+// room exists.
 func (m *Manager) Connect(ctx context.Context, rawCode, token string, client Client) (*Conn, error) {
-	code, ok := NormalizeCode(rawCode)
-	if !ok {
-		return nil, ErrRoomNotFound
-	}
-	if token == "" {
-		return nil, ErrUnauthorized
-	}
-
-	playerID, err := m.store.Authenticate(ctx, code, HashToken(token), m.clock.Now())
+	code, playerID, roomID, err := m.authenticate(ctx, rawCode, token)
 	if err != nil {
 		return nil, err
 	}
 
 	for range maxConnectAttempts {
-		a, err := m.actorFor(ctx, code)
+		a, err := m.actorFor(ctx, code, roomID)
 		if err != nil {
 			return nil, err
 		}
@@ -131,10 +143,37 @@ func (m *Manager) Connect(ctx context.Context, rawCode, token string, client Cli
 	return nil, errActorStopped
 }
 
-// actorFor returns the running actor of the room, loading the room and starting one if needed.
-func (m *Manager) actorFor(ctx context.Context, code string) (*actor, error) {
+// authenticate identifies a player of a room by their session token. A caller without a valid
+// token for the room gets ErrUnauthorized whatever the reason (malformed code, unknown or expired
+// room, wrong token), so these endpoints never tell whether a room exists: guessing codes has to
+// go through join, which is rate-limited.
+func (m *Manager) authenticate(ctx context.Context, rawCode, token string) (code, playerID, roomID string, err error) {
+	code, ok := NormalizeCode(rawCode)
+	if !ok || token == "" {
+		return "", "", "", ErrUnauthorized
+	}
+	playerID, roomID, err = m.store.Authenticate(ctx, code, HashToken(token), m.clock.Now())
+	if errors.Is(err, ErrRoomNotFound) {
+		err = ErrUnauthorized
+	}
+	if err != nil {
+		return "", "", "", err
+	}
+	return code, playerID, roomID, nil
+}
+
+// actorFor returns the running actor of the room roomID (whose code is code), loading the room
+// and starting one if needed. A code is reused only after its room was deleted: an actor still
+// running for the old room is expired and replaced.
+func (m *Manager) actorFor(ctx context.Context, code, roomID string) (*actor, error) {
 	m.mu.Lock()
 	a, ok := m.actors[code]
+	if ok && a.state.RoomID != roomID {
+		delete(m.actors, code)
+		ok = false
+		stale := a
+		defer func() { stale.do(stale.expire) }()
+	}
 	m.mu.Unlock()
 	if ok {
 		return a, nil
@@ -148,7 +187,7 @@ func (m *Manager) actorFor(ctx context.Context, code string) (*actor, error) {
 
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if a, ok := m.actors[code]; ok {
+	if a, ok := m.actors[code]; ok && a.state.RoomID == state.RoomID {
 		return a, nil // another connection started it meanwhile
 	}
 	a = newActor(m, state)

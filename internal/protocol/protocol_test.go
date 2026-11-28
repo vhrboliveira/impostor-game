@@ -32,6 +32,16 @@ func TestParseClientMessage_Valid(t *testing.T) {
 			want: ClientMessage{Type: TypeGuess, Guess: &GuessPayload{OptionID: "42"}},
 		},
 		{
+			name: "leave the room",
+			raw:  `{"type":"leave_room"}`,
+			want: ClientMessage{Type: TypeLeaveRoom},
+		},
+		{
+			name: "remove a player",
+			raw:  `{"type":"remove_player","payload":{"playerId":"p2"}}`,
+			want: ClientMessage{Type: TypeRemovePlayer, Remove: &RemovePlayerPayload{PlayerID: "p2"}},
+		},
+		{
 			name: "play again",
 			raw:  `{"type":"play_again","payload":{"totalRounds":5}}`,
 			want: ClientMessage{Type: TypePlayAgain, PlayAgain: &PlayAgainPayload{TotalRounds: 5}},
@@ -90,6 +100,8 @@ func TestParseClientMessage_Invalid(t *testing.T) {
 		{name: "guess with empty option", raw: `{"type":"guess","payload":{"optionId":""}}`},
 		{name: "guess with a number", raw: `{"type":"guess","payload":{"optionId":42}}`},
 		{name: "play again without payload", raw: `{"type":"play_again"}`},
+		{name: "leave with a payload", raw: `{"type":"leave_room","payload":{}}`},
+		{name: "remove without a player", raw: `{"type":"remove_player","payload":{"playerId":""}}`},
 		{name: "play again with text", raw: `{"type":"play_again","payload":{"totalRounds":"5"}}`},
 		{name: "next round with payload", raw: `{"type":"next_round","payload":{}}`},
 		{name: "too large", raw: `{"type":"ping","payload":"` + strings.Repeat("a", MaxMessageBytes) + `"}`},
@@ -129,7 +141,7 @@ func TestServerMessages_JSONShape(t *testing.T) {
 				"match":    map[string]any{"status": "lobby", "totalRounds": float64(5), "roundNumber": float64(0)},
 				"players": []any{map[string]any{
 					"id": "p1", "name": "Ana", "isHost": true, "isConnected": true, "score": float64(0),
-					"avatarUrl": nil,
+					"avatarUrl": nil, "hasLeft": false,
 				}},
 				"round": nil,
 				"me":    map[string]any{"playerId": "p1", "role": nil, "secret": nil, "voteTargetId": nil},

@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/netip"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -36,6 +38,17 @@ type Config struct {
 	RoomTTL time.Duration
 	// EmptyRoomTTL is how long an empty room is kept before being deleted.
 	EmptyRoomTTL time.Duration
+	// TrustedProxies are the networks of the reverse proxies in front of the API: only requests
+	// from them may name the client in X-Forwarded-For.
+	TrustedProxies []netip.Prefix
+}
+
+// InsecureDatabaseTLS reports whether DATABASE_URL does not verify the database server's
+// certificate (sslmode other than verify-full). The pgdriver default (prefer/require) encrypts
+// without verifying, so a network attacker could impersonate the server.
+func (c Config) InsecureDatabaseTLS() bool {
+	u, err := url.Parse(c.DatabaseURL)
+	return err != nil || u.Query().Get("sslmode") != "verify-full"
 }
 
 // IsProd reports whether the application runs in production.
@@ -44,13 +57,18 @@ func (c Config) IsProd() bool {
 }
 
 // DatabaseURL reads and validates only DATABASE_URL. It is used by the CLIs (migrate, seed),
-// which do not need the rest of the settings.
+// which do not need the rest of the settings. An invalid URL is reported without its value, which
+// usually holds the password.
 func DatabaseURL(getenv func(string) string) (string, error) {
-	url := getenv("DATABASE_URL")
-	if url == "" {
+	raw := getenv("DATABASE_URL")
+	if raw == "" {
 		return "", errors.New("DATABASE_URL is required")
 	}
-	return url, nil
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "postgres" && u.Scheme != "postgresql") || u.Host == "" {
+		return "", errors.New("DATABASE_URL must be a postgres:// URL")
+	}
+	return raw, nil
 }
 
 // Load reads the configuration using getenv (usually os.Getenv) and reports every problem
@@ -80,6 +98,22 @@ func Load(getenv func(string) string) (Config, error) {
 	levelText := valueOr(getenv, "LOG_LEVEL", defaultLogLevel)
 	if err := cfg.LogLevel.UnmarshalText([]byte(levelText)); err != nil {
 		errs = append(errs, fmt.Errorf("LOG_LEVEL is invalid: %w", err))
+	} else if cfg.Env == EnvProd && cfg.LogLevel < slog.LevelInfo {
+		// Debug logs every SQL query with its values: photos, token hashes, who the impostor is.
+		errs = append(errs, errors.New("LOG_LEVEL=debug is not allowed in prod"))
+	}
+
+	for _, item := range splitList(getenv("TRUSTED_PROXIES")) {
+		prefix, err := netip.ParsePrefix(item)
+		if err != nil {
+			addr, addrErr := netip.ParseAddr(item)
+			if addrErr != nil {
+				errs = append(errs, fmt.Errorf("TRUSTED_PROXIES must list IPs or CIDRs, got %q", item))
+				continue
+			}
+			prefix = netip.PrefixFrom(addr, addr.BitLen())
+		}
+		cfg.TrustedProxies = append(cfg.TrustedProxies, prefix.Masked())
 	}
 
 	cfg.AllowedOrigins = splitList(getenv("ALLOWED_ORIGINS"))

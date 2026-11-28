@@ -7,58 +7,69 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestPickImpostor_NobodyRepeatsWithinACycle(t *testing.T) {
-	players := []PlayerID{"a", "b", "c", "d"}
-	rng := newRand(5)
+// counts picks over many seeds.
+func counts(t *testing.T, pick func(Rand) (PlayerID, error)) map[PlayerID]int {
+	t.Helper()
+	out := map[PlayerID]int{}
+	for seed := range uint64(300) {
+		p, err := pick(newRand(seed))
+		require.NoError(t, err)
+		out[p]++
+	}
+	return out
+}
 
+// Every player stays eligible in every draw: with public results, excluding the earlier
+// impostors would let the players deduce who the impostor is at the end of each cycle.
+func TestPickImpostor_EveryPlayerStaysEligible(t *testing.T) {
+	got := counts(t, func(r Rand) (PlayerID, error) {
+		return PickImpostor([]PlayerID{"a", "b", "c"}, []PlayerID{"a", "b"}, r)
+	})
+
+	assert.Positive(t, got["a"], "an earlier impostor can be drawn again")
+	assert.Positive(t, got["b"], "an earlier impostor can be drawn again")
+	assert.Greater(t, got["c"], got["a"], "who was picked less is more likely")
+	assert.Greater(t, got["c"], got["b"], "who was picked less is more likely")
+}
+
+func TestPickImpostor_SpreadsThePicksOverAMatch(t *testing.T) {
+	players := []PlayerID{"a", "b", "c"}
+	rng := newRand(5)
 	var history []PlayerID
-	for range 8 {
+	for range 300 {
 		picked, err := PickImpostor(players, history, rng)
 		require.NoError(t, err)
 		history = append(history, picked)
 	}
-
-	assert.ElementsMatch(t, players, history[:4], "first cycle")
-	assert.ElementsMatch(t, players, history[4:], "second cycle")
-}
-
-func TestPickImpostor_IncludesPlayersWhoJoinedLater(t *testing.T) {
-	// "a" and "b" already played; "c" joined between rounds and must be the only candidate.
-	picked, err := PickImpostor([]PlayerID{"a", "b", "c"}, []PlayerID{"a", "b"}, newRand(1))
-
-	require.NoError(t, err)
-	assert.Equal(t, PlayerID("c"), picked)
-}
-
-func TestPickImpostor_IgnoresHistoryOfPlayersWhoLeft(t *testing.T) {
-	// "gone" left the room: it must not stop the cycle from completing.
-	players := []PlayerID{"a", "b", "c"}
-	history := []PlayerID{"gone", "a", "b"}
-
-	picked, err := PickImpostor(players, history, newRand(1))
-
-	require.NoError(t, err)
-	assert.Equal(t, PlayerID("c"), picked)
-}
-
-func TestPickSubject_NeverPicksTheImpostorAndPrefersUnseenPlayers(t *testing.T) {
-	players := []PlayerID{"a", "b", "c"}
-
-	for seed := range uint64(20) {
-		picked, err := PickSubject(players, []PlayerID{"a"}, "b", newRand(seed))
-
-		require.NoError(t, err)
-		assert.Equal(t, PlayerID("c"), picked, "seed=%d", seed)
+	for _, p := range players {
+		n := 0
+		for _, h := range history {
+			if h == p {
+				n++
+			}
+		}
+		assert.InDelta(t, 100, n, 15, "player %s", p)
 	}
 }
 
-func TestPickSubject_RestartsTheCycleWhenOnlyTheImpostorIsLeft(t *testing.T) {
-	players := []PlayerID{"a", "b", "c"}
+func TestPickImpostor_IgnoresHistoryOfPlayersWhoLeft(t *testing.T) {
+	// "gone" left the room: only the current players' picks weigh.
+	got := counts(t, func(r Rand) (PlayerID, error) {
+		return PickImpostor([]PlayerID{"a", "b", "c"}, []PlayerID{"gone", "a", "b"}, r)
+	})
 
-	picked, err := PickSubject(players, []PlayerID{"a", "c"}, "b", newRand(9))
+	assert.NotContains(t, got, PlayerID("gone"))
+	assert.Greater(t, got["c"], got["a"])
+}
 
-	require.NoError(t, err)
-	assert.NotEqual(t, PlayerID("b"), picked)
+func TestPickSubject_NeverPicksTheImpostorButKeepsEarlierSubjects(t *testing.T) {
+	got := counts(t, func(r Rand) (PlayerID, error) {
+		return PickSubject([]PlayerID{"a", "b", "c"}, []PlayerID{"a"}, "b", r)
+	})
+
+	assert.NotContains(t, got, PlayerID("b"), "the impostor is never the subject")
+	assert.Positive(t, got["a"], "an earlier subject stays possible, so the impostor cannot rule it out")
+	assert.Greater(t, got["c"], got["a"])
 }
 
 func TestPickSubject_FailsWhenNobodyIsEligible(t *testing.T) {

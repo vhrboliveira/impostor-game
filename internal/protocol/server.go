@@ -25,21 +25,33 @@ const (
 	ErrCodeThemeUnavailable = "theme_unavailable"
 	// ErrCodeInvalidVote: a vote for oneself or for someone outside the round.
 	ErrCodeInvalidVote = "invalid_vote"
-	// ErrCodeAlreadyVoted: votes are final.
-	ErrCodeAlreadyVoted = "already_voted"
 	// ErrCodeNotImpostor: only the found impostor guesses.
 	ErrCodeNotImpostor = "not_impostor"
 	// ErrCodeInvalidGuess: the option is not one of the guess options.
 	ErrCodeInvalidGuess = "invalid_guess"
 	// ErrCodeInvalidRounds: play_again with a number of rounds that is not 3, 5, 8, 10 or 12.
 	ErrCodeInvalidRounds = "invalid_rounds"
+	// ErrCodeInvalidPlayer: remove_player names nobody of the room, or the host themselves.
+	ErrCodeInvalidPlayer = "invalid_player"
 	ErrCodeInternal      = "internal_error"
 )
 
 // Application close codes. The client does not reconnect after them.
 const (
 	CloseUnauthorized = 4401
+	// CloseRemoved: the player left the room or was removed (by the host, or offline too long).
+	CloseRemoved      = 4403
 	CloseRoomNotFound = 4404
+)
+
+// Standard close codes the server also uses. The client reconnects after them.
+const (
+	// ClosePolicyViolation (1008) closes a connection that sent messages too fast, or the oldest
+	// connection of a player who opened too many.
+	ClosePolicyViolation = 1008
+	// CloseInternalError (1011) closes the connections of a room whose actor failed; reconnecting
+	// loads the room again.
+	CloseInternalError = 1011
 )
 
 // Roles of a player in a round, as seen by that player.
@@ -103,6 +115,9 @@ type PlayerView struct {
 	Score       int    `json:"score"`
 	// AvatarURL is the player's photo (GET, versioned so it can be cached), null without one.
 	AvatarURL *string `json:"avatarUrl"`
+	// HasLeft marks a player who left the room. They are still listed so the names of the round
+	// resolve; the app hides them from the lobby, the scoreboard and the podium.
+	HasLeft bool `json:"hasLeft"`
 }
 
 // RoundView is the current round. Slices are never nil, so they encode as [] and not null.

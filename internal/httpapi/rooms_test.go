@@ -161,3 +161,37 @@ func TestRoomEndpoints_OnlyAcceptPost(t *testing.T) {
 	assert.Equal(t, map[string]any{"code": "not_found"}, decodeBody(t, rec))
 	assert.Zero(t, rooms.calls)
 }
+
+// JSON responses are never cached (the create/join ones carry the session token) and never
+// sniffed as another type.
+func TestJSONResponses_HaveSafetyHeaders(t *testing.T) {
+	rec := postJSON(t, newRoomsRouter(&fakeRooms{session: testSession}), "/api/room", `{"playerName":"Ana","totalRounds":5}`)
+
+	require.Equal(t, http.StatusCreated, rec.Code)
+	assert.Equal(t, "no-store", rec.Header().Get("Cache-Control"))
+	assert.Equal(t, "nosniff", rec.Header().Get("X-Content-Type-Options"))
+}
+
+// The JSON endpoints only take application/json: another site's page cannot send them a
+// "simple" cross-site request (a form or text/plain post) without a CORS preflight.
+func TestJSONEndpoints_RequireJSONContentType(t *testing.T) {
+	rooms := &fakeRooms{session: testSession}
+	for _, contentType := range []string{"", "text/plain", "application/x-www-form-urlencoded"} {
+		req := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/room", strings.NewReader(`{"playerName":"Ana","totalRounds":5}`))
+		if contentType != "" {
+			req.Header.Set("Content-Type", contentType)
+		}
+		rec := httptest.NewRecorder()
+		newRoomsRouter(rooms).ServeHTTP(rec, req)
+
+		assert.Equal(t, http.StatusUnsupportedMediaType, rec.Code, contentType)
+		assert.Equal(t, "unsupported_media_type", decodeBody(t, rec)["code"], contentType)
+	}
+	assert.Zero(t, rooms.calls)
+
+	ok := httptest.NewRequestWithContext(t.Context(), http.MethodPost, "/api/room/ABCDE/join", strings.NewReader(`{"playerName":"Bia"}`))
+	ok.Header.Set("Content-Type", "application/json; charset=utf-8")
+	rec := httptest.NewRecorder()
+	newRoomsRouter(rooms).ServeHTTP(rec, ok)
+	assert.Equal(t, http.StatusCreated, rec.Code)
+}

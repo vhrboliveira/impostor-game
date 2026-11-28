@@ -19,6 +19,9 @@ func (a *actor) startVoting(c Client) {
 	defer cancel()
 	if err := a.m.store.StartVoting(ctx, round.ID, deadline); err != nil {
 		a.failCommand(c, "start voting", err)
+		if c == nil {
+			a.retryLater(func() { a.startVoting(nil) })
+		}
 		return
 	}
 
@@ -29,10 +32,11 @@ func (a *actor) startVoting(c Client) {
 	a.broadcast()
 }
 
-// vote records a player's vote. Votes are final; voting for oneself or for someone outside the
-// round is refused.
+// vote records a player's vote, or changes it: a player can change their vote while the voting is
+// open (it closes when every connected player of the round voted, or at the deadline). Voting for
+// oneself or for someone outside the round is refused.
 func (a *actor) vote(playerID string, c Client, payload *protocol.VotePayload) {
-	round := a.state.Round
+	round := a.activeRound()
 	switch {
 	case round == nil || round.Phase != game.PhaseVoting:
 		c.Send(protocol.ErrorMessage(protocol.ErrCodeInvalidPhase))
@@ -40,12 +44,11 @@ func (a *actor) vote(playerID string, c Client, payload *protocol.VotePayload) {
 	case !round.hasPlayer(playerID):
 		c.Send(protocol.ErrorMessage(protocol.ErrCodeNotParticipant))
 		return
-	case round.Votes[playerID] != "":
-		c.Send(protocol.ErrorMessage(protocol.ErrCodeAlreadyVoted))
-		return
 	case payload.TargetID == playerID || !round.hasPlayer(payload.TargetID):
 		c.Send(protocol.ErrorMessage(protocol.ErrCodeInvalidVote))
 		return
+	case round.Votes[playerID] == payload.TargetID:
+		return // the same vote again: nothing changes
 	}
 
 	ctx, cancel := storeContext()
@@ -64,7 +67,7 @@ func (a *actor) vote(playerID string, c Client, payload *protocol.VotePayload) {
 // closeVotingIfAllVoted closes the voting when every connected player of the round voted.
 // Offline players never hold it. It reports whether it closed it (and broadcast).
 func (a *actor) closeVotingIfAllVoted() bool {
-	round := a.state.Round
+	round := a.activeRound()
 	if round == nil || round.Phase != game.PhaseVoting {
 		return false
 	}
@@ -98,13 +101,16 @@ func (a *actor) closeVoting() {
 
 	tally := game.CountVotes(round.votes(), game.PlayerID(round.ImpostorID))
 	if !tally.ImpostorFound {
-		a.finishRound(nil, abstainers, false, nil)
+		if !a.finishRound(nil, abstainers, false, nil) {
+			a.retryLater(a.closeVoting)
+		}
 		return
 	}
 
 	options, err := a.guessOptions(round)
 	if err != nil {
 		a.logError("guess options", err)
+		a.retryLater(a.closeVoting)
 		return
 	}
 	ids := make([]string, len(options))
@@ -122,6 +128,7 @@ func (a *actor) closeVoting() {
 		Deadline:   deadline,
 	}); err != nil {
 		a.logError("start guess", err)
+		a.retryLater(a.closeVoting)
 		return
 	}
 
@@ -137,7 +144,8 @@ func (a *actor) closeVoting() {
 }
 
 // guessOptions draws up to game.GuessOptions possible secrets, the right one among them: words of
-// the theme, or the players of the round other than the impostor in a players theme.
+// the theme no other round of the room used, or the players of the round other than the impostor
+// in a players theme.
 func (a *actor) guessOptions(round *RoundState) ([]GuessOption, error) {
 	var (
 		right  GuessOption
@@ -157,7 +165,9 @@ func (a *actor) guessOptions(round *RoundState) ([]GuessOption, error) {
 	} else {
 		ctx, cancel := storeContext()
 		defer cancel()
-		words, err := a.m.store.LoadThemeWords(ctx, round.Theme.ID)
+		// The same unused words the secret came from: an earlier secret of the room, already
+		// revealed in its result, would be an option the impostor can rule out.
+		words, err := a.m.store.LoadGuessWords(ctx, a.state.RoomID, round.Theme.ID, round.ID)
 		if err != nil {
 			return nil, err
 		}
@@ -179,7 +189,7 @@ func (a *actor) guessOptions(round *RoundState) ([]GuessOption, error) {
 
 // guess is the found impostor's pick.
 func (a *actor) guess(playerID string, c Client, payload *protocol.GuessPayload) {
-	round := a.state.Round
+	round := a.activeRound()
 	switch {
 	case round == nil || round.Phase != game.PhaseGuess:
 		c.Send(protocol.ErrorMessage(protocol.ErrCodeInvalidPhase))
@@ -200,12 +210,15 @@ func (a *actor) guess(playerID string, c Client, payload *protocol.GuessPayload)
 
 // guessTimedOut ends a guess the impostor did not make in time: a wrong guess.
 func (a *actor) guessTimedOut() {
-	a.finishRound(nil, nil, true, &GuessState{})
+	if !a.finishRound(nil, nil, true, &GuessState{}) {
+		a.retryLater(a.guessTimedOut)
+	}
 }
 
 // finishRound scores the round and moves it to the result. abstainers are the players who did
-// not vote, when the round comes straight from the voting.
-func (a *actor) finishRound(c Client, abstainers []string, found bool, guess *GuessState) {
+// not vote, when the round comes straight from the voting. It reports whether the round was
+// written; on failure the round stays as it was.
+func (a *actor) finishRound(c Client, abstainers []string, found bool, guess *GuessState) bool {
 	round := a.state.Round
 	for _, id := range abstainers {
 		round.Votes[id] = ""
@@ -235,7 +248,7 @@ func (a *actor) finishRound(c Client, abstainers []string, found bool, guess *Gu
 			delete(round.Votes, id)
 		}
 		a.failCommand(c, "finish round", err)
-		return
+		return false
 	}
 
 	a.phaseTimer.cancel()
@@ -251,6 +264,7 @@ func (a *actor) finishRound(c Client, abstainers []string, found bool, guess *Gu
 		a.logError("reload scores", err)
 	}
 	a.broadcast()
+	return true
 }
 
 // nextRound is the host's "Próxima rodada": a new round in theme selection, or the end of the
@@ -273,6 +287,7 @@ func (a *actor) nextRound(playerID string, c Client) {
 		return
 	}
 
+	a.phaseTimer.cancel()
 	a.state.PastRounds = append(a.state.PastRounds, PastRound{ImpostorID: round.ImpostorID, SubjectID: round.SubjectID})
 	a.state.Round = &RoundState{ID: id, Number: round.Number + 1, Phase: game.PhaseThemeSelection}
 	a.confirmed = nil
@@ -336,6 +351,7 @@ func (a *actor) playAgain(playerID string, c Client, payload *protocol.PlayAgain
 		return
 	}
 
+	a.phaseTimer.cancel()
 	a.state.Match = match
 	a.state.Round = nil
 	a.state.PastRounds = nil

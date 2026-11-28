@@ -15,21 +15,36 @@ import (
 type call struct {
 	now      time.Time
 	emptyTTL time.Duration
+	limit    int
 }
 
 type fakeStore struct {
-	calls   chan call
-	deleted int64
+	calls chan call
+	// deleted is what each call returns, in order; the last value repeats.
+	deleted []int64
 	err     error
+	// block makes the call wait for its context.
+	block bool
 }
 
 func newFakeStore() *fakeStore {
 	return &fakeStore{calls: make(chan call, 16)}
 }
 
-func (f *fakeStore) DeleteExpired(_ context.Context, now time.Time, emptyTTL time.Duration) (int64, error) {
-	f.calls <- call{now: now, emptyTTL: emptyTTL}
-	return f.deleted, f.err
+func (f *fakeStore) DeleteExpired(ctx context.Context, now time.Time, emptyTTL time.Duration, limit int) (int64, error) {
+	f.calls <- call{now: now, emptyTTL: emptyTTL, limit: limit}
+	if f.block {
+		<-ctx.Done()
+		return 0, ctx.Err()
+	}
+	var n int64
+	if len(f.deleted) > 0 {
+		n = f.deleted[0]
+		if len(f.deleted) > 1 {
+			f.deleted = f.deleted[1:]
+		}
+	}
+	return n, f.err
 }
 
 func discardLogger() *slog.Logger {
@@ -84,5 +99,37 @@ func TestRun_CleansImmediatelyAndOnEveryTickUntilCanceled(t *testing.T) {
 	case <-done:
 	case <-time.After(2 * time.Second):
 		t.Fatal("Run did not stop after the context was canceled")
+	}
+}
+
+// Deleting thousands of rooms (with their cascades) in one statement holds row locks for the
+// whole batch: the janitor deletes in bounded batches until a batch comes back short.
+func TestRunOnce_DeletesInBatches(t *testing.T) {
+	store := newFakeStore()
+	store.deleted = []int64{DefaultBatchSize, DefaultBatchSize, 3}
+	j := New(store, discardLogger(), time.Minute, time.Hour)
+
+	require.NoError(t, j.RunOnce(context.Background()))
+
+	require.Len(t, store.calls, 3)
+	for range 3 {
+		assert.Equal(t, DefaultBatchSize, (<-store.calls).limit)
+	}
+}
+
+// A hung database must not stall the cleanup forever: each run has its own deadline.
+func TestRunOnce_HasADeadline(t *testing.T) {
+	store := newFakeStore()
+	store.block = true
+	j := New(store, discardLogger(), time.Minute, time.Hour)
+	j.runTimeout = 20 * time.Millisecond
+
+	done := make(chan error, 1)
+	go func() { done <- j.RunOnce(context.Background()) }()
+	select {
+	case err := <-done:
+		assert.ErrorIs(t, err, context.DeadlineExceeded)
+	case <-time.After(2 * time.Second):
+		t.Fatal("RunOnce did not give up")
 	}
 }

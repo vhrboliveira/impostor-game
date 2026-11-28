@@ -6,6 +6,8 @@ coverage.out
 
 # Local configuration (never commit secrets)
 .env
+.env.*
+!.env.example
 
 # Editors and OS
 .idea/

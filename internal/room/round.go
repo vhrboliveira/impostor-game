@@ -95,7 +95,8 @@ func (a *actor) beginRound(round *RoundState, theme Theme, drawn bool, players [
 		params.SubjectID = string(subject)
 		secret = a.player(params.SubjectID).Name
 	default:
-		if len(candidates.Words) == 0 {
+		// The guess options come from these same unused words.
+		if len(candidates.Words) < game.MinGuessWords {
 			return errThemeUnavailable
 		}
 		word := candidates.Words[a.rng.IntN(len(candidates.Words))]
@@ -148,7 +149,7 @@ func (a *actor) beginRound(round *RoundState, theme Theme, drawn bool, players [
 // confirmReveal records that a player saw their role ("Entendi"). The questions start once every
 // connected player of the round confirmed.
 func (a *actor) confirmReveal(playerID string, c Client) {
-	round := a.state.Round
+	round := a.activeRound()
 	if round == nil || round.Phase != game.PhaseReveal {
 		c.Send(protocol.ErrorMessage(protocol.ErrCodeInvalidPhase))
 		return
@@ -158,6 +159,9 @@ func (a *actor) confirmReveal(playerID string, c Client) {
 		return
 	}
 
+	if a.confirmed[playerID] {
+		return // already confirmed: nothing changed, nothing to send
+	}
 	a.confirmed[playerID] = true
 	if !a.startQuestionsIfAllConfirmed() {
 		a.broadcast()
@@ -168,7 +172,7 @@ func (a *actor) confirmReveal(playerID string, c Client) {
 // confirmed the reveal. Offline players do not hold the round. It reports whether it started
 // them (and broadcast).
 func (a *actor) startQuestionsIfAllConfirmed() bool {
-	round := a.state.Round
+	round := a.activeRound()
 	if round == nil || round.Phase != game.PhaseReveal {
 		return false
 	}
@@ -209,6 +213,9 @@ func (a *actor) startQuestions(c Client) {
 	defer cancel()
 	if err := a.m.store.StartQuestions(ctx, round.ID, first.ID, now, deadline); err != nil {
 		a.failCommand(c, "start questions", err)
+		if c == nil {
+			a.retryLater(func() { a.startQuestions(nil) })
+		}
 		return
 	}
 
@@ -280,6 +287,9 @@ func (a *actor) advanceTurn(c Client, endedBy string) {
 	defer cancel()
 	if err := a.m.store.AdvanceTurn(ctx, params); err != nil {
 		a.failCommand(c, "advance turn", err)
+		if c == nil {
+			a.retryLater(func() { a.advanceTurn(nil, endedBy) })
+		}
 		return
 	}
 
@@ -327,7 +337,8 @@ func (a *actor) endDiscussion(playerID string, c Client) {
 // resumeRound re-arms the timer of a round loaded from the database (after a restart or after
 // the actor stopped while idle). A deadline already in the past fires right away.
 func (a *actor) resumeRound() {
-	round := a.state.Round
+	// The round of a finished or ended match stays frozen in the phase it had.
+	round := a.activeRound()
 	if round == nil {
 		return
 	}
@@ -338,10 +349,16 @@ func (a *actor) resumeRound() {
 		a.armTurnDeadline()
 	case game.PhaseDiscussion:
 		a.armDiscussionDeadline()
-	case game.PhaseVoting:
-		a.armPhaseDeadline(a.closeVoting)
-	case game.PhaseGuess:
-		a.armPhaseDeadline(a.guessTimedOut)
+	case game.PhaseVoting, game.PhaseGuess:
+		if round.Votes == nil {
+			// Storage leaves the map nil while the round has no vote row yet.
+			round.Votes = make(map[string]string)
+		}
+		if round.Phase == game.PhaseVoting {
+			a.armPhaseDeadline(a.closeVoting)
+		} else {
+			a.armPhaseDeadline(a.guessTimedOut)
+		}
 	}
 }
 
@@ -350,22 +367,62 @@ func (a *actor) armDiscussionDeadline() {
 	a.armPhaseDeadline(func() { a.startVoting(nil) })
 }
 
-// armPhaseDeadline schedules fn at the round's phase deadline.
+// armPhaseDeadline schedules fn at the round's phase deadline. The callback does nothing unless
+// the same round of a match in progress is still in the same phase.
 func (a *actor) armPhaseDeadline(fn func()) {
-	deadline := a.state.Round.PhaseDeadline
-	if deadline == nil {
+	round := a.state.Round
+	if round.PhaseDeadline == nil {
 		return
 	}
-	a.arm(&a.phaseTimer, deadline.Sub(a.m.clock.Now()), fn)
+	roundID, phase := round.ID, round.Phase
+	a.arm(&a.phaseTimer, round.PhaseDeadline.Sub(a.m.clock.Now()), func() {
+		if r := a.activeRound(); r != nil && r.ID == roundID && r.Phase == phase {
+			fn()
+		}
+	})
 }
 
-// armTurnDeadline schedules the automatic advance of the turn in progress.
+// armTurnDeadline schedules the automatic advance of the turn in progress. The callback does
+// nothing unless that turn of a match in progress is still the current one.
 func (a *actor) armTurnDeadline() {
-	turn := a.state.Round.Turns[a.state.Round.CurrentTurn]
+	round := a.state.Round
+	turn := round.Turns[round.CurrentTurn]
 	if turn.DeadlineAt == nil {
 		return
 	}
-	a.arm(&a.phaseTimer, turn.DeadlineAt.Sub(a.m.clock.Now()), func() { a.advanceTurn(nil, endedByTimeout) })
+	roundID, turnID := round.ID, turn.ID
+	a.arm(&a.phaseTimer, turn.DeadlineAt.Sub(a.m.clock.Now()), func() {
+		r := a.activeRound()
+		if r == nil || r.ID != roundID || r.Phase != game.PhaseQuestions || r.Turns[r.CurrentTurn].ID != turnID {
+			return
+		}
+		a.advanceTurn(nil, endedByTimeout)
+	})
+}
+
+// retryLater re-runs a timer-driven transition whose database write failed, after
+// storeRetryDelay, as long as the same round of a match in progress is still in the same phase.
+// Without it the round would stay in its phase with no deadline left.
+func (a *actor) retryLater(fn func()) {
+	round := a.activeRound()
+	if round == nil {
+		return
+	}
+	roundID, phase := round.ID, round.Phase
+	a.arm(&a.phaseTimer, storeRetryDelay, func() {
+		if r := a.activeRound(); r != nil && r.ID == roundID && r.Phase == phase {
+			fn()
+		}
+	})
+}
+
+// activeRound is the round of the match in progress. It is nil once the match finished or ended
+// early: the round of such a match accepts no command, presence change or timer.
+func (a *actor) activeRound() *RoundState {
+	if a.state.Match.Status != game.MatchInProgress {
+		return nil
+	}
+	return a.state.Round
 }
 
 // requireHostInPhase checks that playerID is the host and the round is in phase. It answers c
@@ -375,8 +432,8 @@ func (a *actor) requireHostInPhase(playerID string, c Client, phase game.Phase) 
 		c.Send(protocol.ErrorMessage(protocol.ErrCodeNotHost))
 		return nil, false
 	}
-	round := a.state.Round
-	if a.state.Match.Status != game.MatchInProgress || round == nil || round.Phase != phase {
+	round := a.activeRound()
+	if round == nil || round.Phase != phase {
 		c.Send(protocol.ErrorMessage(protocol.ErrCodeInvalidPhase))
 		return nil, false
 	}
@@ -386,7 +443,7 @@ func (a *actor) requireHostInPhase(playerID string, c Client, phase game.Phase) 
 // requireTurnController checks that the round is in the questions phase and that playerID is
 // the answerer of the turn in progress or the host.
 func (a *actor) requireTurnController(playerID string, c Client) (*TurnState, bool) {
-	round := a.state.Round
+	round := a.activeRound()
 	if round == nil || round.Phase != game.PhaseQuestions {
 		c.Send(protocol.ErrorMessage(protocol.ErrCodeInvalidPhase))
 		return nil, false

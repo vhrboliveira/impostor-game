@@ -24,6 +24,10 @@ const (
 	TypeNextRound        = "next_round"
 	TypeEndMatch         = "end_match"
 	TypePlayAgain        = "play_again"
+	// TypeLeaveRoom: the player leaves the room for good (after a confirmation in the app).
+	TypeLeaveRoom = "leave_room"
+	// TypeRemovePlayer: the host removes another player from the room.
+	TypeRemovePlayer = "remove_player"
 )
 
 // MaxMessageBytes bounds a message from a client.
@@ -43,6 +47,12 @@ type ClientMessage struct {
 	Vote        *VotePayload
 	Guess       *GuessPayload
 	PlayAgain   *PlayAgainPayload
+	Remove      *RemovePlayerPayload
+}
+
+// RemovePlayerPayload names the player the host removes.
+type RemovePlayerPayload struct {
+	PlayerID string
 }
 
 // SelectThemePayload is the host's theme choice: a theme id or the random draw ("Sorteio").
@@ -87,7 +97,8 @@ func ParseClientMessage(data []byte) (ClientMessage, error) {
 	msg := ClientMessage{Type: env.Type}
 	switch env.Type {
 	case TypePing, TypeStartMatch, TypeConfirmReveal, TypeStartQuestions, TypeNextTurn,
-		TypeExtendTurn, TypeExtendDiscussion, TypeStartVoting, TypeNextRound, TypeEndMatch:
+		TypeExtendTurn, TypeExtendDiscussion, TypeStartVoting, TypeNextRound, TypeEndMatch,
+		TypeLeaveRoom:
 		if hasPayload {
 			return ClientMessage{}, fmt.Errorf("%w: %s takes no payload", ErrInvalidMessage, env.Type)
 		}
@@ -143,6 +154,21 @@ func ParseClientMessage(data []byte) (ClientMessage, error) {
 			return ClientMessage{}, err
 		}
 		msg.PlayAgain = &PlayAgainPayload{TotalRounds: raw.TotalRounds}
+
+	case TypeRemovePlayer:
+		if !hasPayload {
+			return ClientMessage{}, fmt.Errorf("%w: missing payload", ErrInvalidMessage)
+		}
+		var raw struct {
+			PlayerID string `json:"playerId"`
+		}
+		if err := decodeStrict(env.Payload, &raw); err != nil {
+			return ClientMessage{}, err
+		}
+		if raw.PlayerID == "" || len(raw.PlayerID) > maxIDLength {
+			return ClientMessage{}, fmt.Errorf("%w: invalid playerId", ErrInvalidMessage)
+		}
+		msg.Remove = &RemovePlayerPayload{PlayerID: raw.PlayerID}
 
 	default:
 		return ClientMessage{}, fmt.Errorf("%w: unknown type %q", ErrInvalidMessage, env.Type)

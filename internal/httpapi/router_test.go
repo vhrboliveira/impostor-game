@@ -109,7 +109,7 @@ func TestRequestID(t *testing.T) {
 func TestRecovererTurnsPanicsIntoInternalErrors(t *testing.T) {
 	logger := discardLogger()
 	panicking := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { panic("boom") })
-	handler := chain(panicking, requestID, accessLog(logger), recoverer(logger))
+	handler := chain(panicking, requestID, accessLog(logger, clientAddress{}), recoverer(logger))
 
 	rec := do(t, handler, http.MethodGet, "/")
 

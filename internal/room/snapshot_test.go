@@ -66,3 +66,51 @@ func TestSnapshot_TheSecretNeverReachesTheImpostorBeforeTheResult(t *testing.T) 
 	require.Equal(t, "result", s.Round.Phase)
 	assert.Equal(t, "Pizza", s.Round.Result.Secret, "the result reveals the secret to everyone")
 }
+
+// In the guess, only the found impostor receives the options: in a players theme they are every
+// player of the round but the impostor, so anyone else would learn who the impostor is.
+func TestSnapshot_GuessOptionsOnlyForTheImpostor(t *testing.T) {
+	tb := newTable(t)
+	tb.selectTheme(2)
+	for _, id := range []string{"ana", "bia", "caio"} {
+		tb.send(id, protocol.ClientMessage{Type: protocol.TypeConfirmReveal})
+	}
+	for range 3 {
+		tb.send(tb.currentTurn().AnswererID, protocol.ClientMessage{Type: protocol.TypeNextTurn})
+	}
+	tb.send("ana", protocol.ClientMessage{Type: protocol.TypeStartVoting})
+	tb.everyoneVotesForTheImpostor()
+	require.Equal(t, "guess", tb.snapshot("ana").Round.Phase)
+
+	impostor := tb.impostor()
+	assert.NotEmpty(t, tb.snapshot(impostor).Round.GuessOptions)
+	for _, id := range tb.others(impostor) {
+		assert.Empty(t, tb.snapshot(id).Round.GuessOptions, id)
+	}
+}
+
+// During the reveal the confirmations are listed in player order, not in ring order: the ring
+// (who asks whom) is only shown turn by turn.
+func TestSnapshot_RevealConfirmationsInPlayerOrder(t *testing.T) {
+	tb := newTable(t)
+	tb.selectTheme(1)
+	order := map[string]int{"ana": 0, "bia": 1, "caio": 2}
+	var askers []string
+	for _, turn := range tb.store.began[0].Turns {
+		askers = append(askers, turn.AskerID)
+	}
+	// Pick two players whose ring order is the reverse of their player order.
+	var first, second string
+	for i := range askers {
+		for j := i + 1; j < len(askers); j++ {
+			if order[askers[i]] > order[askers[j]] {
+				first, second = askers[j], askers[i]
+			}
+		}
+	}
+	require.NotEmpty(t, first, "the seeded ring must differ from the player order")
+
+	tb.send(first, protocol.ClientMessage{Type: protocol.TypeConfirmReveal})
+	tb.send(second, protocol.ClientMessage{Type: protocol.TypeConfirmReveal})
+	assert.Equal(t, []string{first, second}, tb.snapshot("ana").Round.ConfirmedIDs)
+}

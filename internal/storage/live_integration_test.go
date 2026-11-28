@@ -45,26 +45,27 @@ func TestRooms_Authenticate(t *testing.T) {
 	lr := newLiveRoom(t)
 
 	t.Run("a player's token", func(t *testing.T) {
-		id, err := lr.rooms.Authenticate(ctx, "ABCDE", "hash-Bia", lobbyNow)
+		id, roomID, err := lr.rooms.Authenticate(ctx, "ABCDE", "hash-Bia", lobbyNow)
 
 		require.NoError(t, err)
 		assert.Equal(t, lr.bia, id)
+		assert.Equal(t, lr.roomID, roomID)
 	})
 
 	t.Run("a token of no player", func(t *testing.T) {
-		_, err := lr.rooms.Authenticate(ctx, "ABCDE", "unknown", lobbyNow)
+		_, _, err := lr.rooms.Authenticate(ctx, "ABCDE", "unknown", lobbyNow)
 
 		require.ErrorIs(t, err, room.ErrUnauthorized)
 	})
 
 	t.Run("an unknown room", func(t *testing.T) {
-		_, err := lr.rooms.Authenticate(ctx, "ZZZZZ", "hash-Bia", lobbyNow)
+		_, _, err := lr.rooms.Authenticate(ctx, "ZZZZZ", "hash-Bia", lobbyNow)
 
 		require.ErrorIs(t, err, room.ErrRoomNotFound)
 	})
 
 	t.Run("an expired room", func(t *testing.T) {
-		_, err := lr.rooms.Authenticate(ctx, "ABCDE", "hash-Bia", lobbyNow.Add(25*time.Hour))
+		_, _, err := lr.rooms.Authenticate(ctx, "ABCDE", "hash-Bia", lobbyNow.Add(25*time.Hour))
 
 		require.ErrorIs(t, err, room.ErrRoomNotFound)
 	})
@@ -168,6 +169,10 @@ func TestRooms_SetEmptySince(t *testing.T) {
 	got := readEmptySince()
 	require.NotNil(t, got)
 	assert.True(t, got.Equal(later))
+
+	// The janitor deleted the room under its actor: the actor learns it from the update.
+	err := lr.rooms.SetEmptySince(ctx, "00000000-0000-0000-0000-000000000000", nil)
+	require.ErrorIs(t, err, room.ErrRoomNotFound)
 }
 
 func TestRooms_TransferHost(t *testing.T) {
@@ -472,13 +477,20 @@ func TestRooms_VotingGuessAndResult(t *testing.T) {
 
 	require.NoError(t, f.rooms.CastVote(ctx, f.roundID, f.ana, f.caio, lobbyNow))
 	require.NoError(t, f.rooms.CastVote(ctx, f.roundID, f.bia, f.caio, lobbyNow))
-	require.Error(t, f.rooms.CastVote(ctx, f.roundID, f.ana, f.bia, lobbyNow), "votes are final")
+	require.NoError(t, f.rooms.CastVote(ctx, f.roundID, f.ana, f.bia, lobbyNow), "a vote can change")
+	require.NoError(t, f.rooms.CastVote(ctx, f.roundID, f.ana, f.caio, lobbyNow), "and change back")
 	require.Error(t, f.rooms.CastVote(ctx, f.roundID, f.caio, f.caio, lobbyNow), "the database refuses self-votes")
 	assert.Equal(t, map[string]string{f.ana: f.caio, f.bia: f.caio}, load().Votes)
 
-	words, err := f.rooms.LoadThemeWords(ctx, f.foods.ID)
+	words, err := f.rooms.LoadGuessWords(ctx, f.roomID, f.foods.ID, f.roundID)
 	require.NoError(t, err)
-	require.Len(t, words, 2, "every word of the theme, used or not")
+	require.Len(t, words, 2, "the round's own secret plus the words no round of the room used")
+
+	// Seen from another round, Pizza is the secret of an earlier round: it is not a possible answer.
+	elsewhere, err := f.rooms.LoadGuessWords(ctx, f.roomID, f.foods.ID, "00000000-0000-0000-0000-000000000000")
+	require.NoError(t, err)
+	require.Len(t, elsewhere, 1)
+	assert.NotEqual(t, pizza.ID, elsewhere[0].ID)
 
 	sushi := words[1]
 	options := []string{strconv.FormatInt(sushi.ID, 10), strconv.FormatInt(pizza.ID, 10)}
@@ -616,4 +628,23 @@ func TestRooms_NextRoundEndMatchAndPlayAgain(t *testing.T) {
 
 	_, err = f.rooms.AddPlayer(ctx, addParams("ABCDE", "Duda"))
 	require.NoError(t, err, "the new match is in the lobby")
+}
+
+func TestRooms_MarkConnected(t *testing.T) {
+	ctx := context.Background()
+	lr := newLiveRoom(t)
+	connectedAt := func() *time.Time {
+		var p storage.Player
+		require.NoError(t, lr.db.NewSelect().Model(&p).Where("id = ?", lr.bia).Scan(ctx))
+		return p.ConnectedAt
+	}
+	require.Nil(t, connectedAt())
+
+	first := lobbyNow.Add(time.Minute)
+	require.NoError(t, lr.rooms.MarkConnected(ctx, lr.bia, first))
+	require.NoError(t, lr.rooms.MarkConnected(ctx, lr.bia, first.Add(time.Hour)))
+
+	got := connectedAt()
+	require.NotNil(t, got)
+	assert.True(t, got.Equal(first), "the first connection is kept")
 }

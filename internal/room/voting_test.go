@@ -1,6 +1,7 @@
 package room
 
 import (
+	"strconv"
 	"testing"
 	"time"
 
@@ -61,7 +62,6 @@ func (tb *table) guess(playerID, optionID string) {
 func TestVote_Errors(t *testing.T) {
 	tb := newTable(t)
 	tb.toVoting()
-	impostor := tb.impostor()
 
 	tb.vote("bia", "bia")
 	assert.Equal(t, protocol.ErrCodeInvalidVote, tb.clients["bia"].lastError(), "nobody votes for themselves")
@@ -69,11 +69,25 @@ func TestVote_Errors(t *testing.T) {
 	tb.vote("bia", "stranger")
 	assert.Equal(t, protocol.ErrCodeInvalidVote, tb.clients["bia"].lastError())
 
+}
+
+func TestVote_CanChangeWhileTheVotingIsOpen(t *testing.T) {
+	tb := newTable(t)
+	tb.toVoting()
+	impostor := tb.impostor()
 	voter := tb.others(impostor)[0]
+	other := tb.others(impostor, voter)[0]
+
 	tb.vote(voter, impostor)
-	tb.vote(voter, tb.others(impostor, voter)[0])
-	assert.Equal(t, protocol.ErrCodeAlreadyVoted, tb.clients[voter].lastError(), "votes are final")
-	assert.Len(t, tb.store.castVotes, 1)
+	tb.vote(voter, impostor) // the same vote again changes nothing
+	tb.vote(voter, other)
+
+	assert.Empty(t, tb.clients[voter].lastError())
+	assert.Equal(t, []string{voter + ">" + impostor, voter + ">" + other}, tb.store.castVotes)
+	s := tb.snapshot(voter)
+	require.NotNil(t, s.Me.VoteTargetID)
+	assert.Equal(t, other, *s.Me.VoteTargetID)
+	assert.Equal(t, game.PhaseVoting, game.Phase(s.Round.Phase), "one vote does not close it")
 }
 
 func TestVote_OnlyDuringTheVoting(t *testing.T) {
@@ -122,7 +136,7 @@ func TestVoting_FoundImpostorGuessesRightAndScores(t *testing.T) {
 	}
 	require.NotEmpty(t, pizza, "the secret is among the options")
 	assert.Len(t, labels, game.GuessOptions, "options do not repeat")
-	assert.Equal(t, s.Round.GuessOptions, tb.snapshot(insiders[0]).Round.GuessOptions)
+	assert.Empty(t, tb.snapshot(insiders[0]).Round.GuessOptions, "only the impostor gets the options")
 
 	tb.guess(insiders[0], pizza)
 	assert.Equal(t, protocol.ErrCodeNotImpostor, tb.clients[insiders[0]].lastError())
@@ -291,9 +305,13 @@ func TestNextRound(t *testing.T) {
 		assert.Nil(t, s.Me.Role)
 		assert.Equal(t, []int{2}, tb.store.nextRounds)
 
-		tb.store.candidates[1] = RoundCandidates{Words: []Word{{ID: 12, Text: "Sushi"}}, Questions: questionList("comida", 5)}
+		tb.store.candidates[1] = RoundCandidates{Words: wordList(12, "Sushi", "Lasanha", "Pastel", "Coxinha"), Questions: questionList("comida", 5)}
 		tb.selectTheme(1)
-		assert.NotEqual(t, first, tb.impostor(), "the impostor does not repeat until everyone had a turn")
+		require.Len(t, tb.store.began, 2, "the next round starts")
+		tb.m.mu.Lock()
+		a := tb.m.actors["K7M2P"]
+		tb.m.mu.Unlock()
+		assert.Equal(t, []PastRound{{ImpostorID: first}}, a.state.PastRounds, "the rotation weighs the earlier impostor")
 	})
 
 	t.Run("after the last round it ends the match", func(t *testing.T) {
@@ -404,4 +422,136 @@ func TestResume_AGuessLoadedFromTheDatabaseTimesOut(t *testing.T) {
 	s := client.lastSnapshot(t)
 	assert.Equal(t, "result", s.Round.Phase)
 	assert.False(t, s.Round.Result.Guess.Correct)
+}
+
+// An ended match freezes its round: no round command, presence change or timer of that match
+// runs afterwards, and its scores are final.
+func TestEndMatch_FreezesTheRound(t *testing.T) {
+	end := func(tb *table) {
+		tb.send("ana", protocol.ClientMessage{Type: protocol.TypeEndMatch})
+		require.Equal(tb.t, "ended_early", tb.snapshot("ana").Match.Status)
+	}
+
+	t.Run("turn commands are refused", func(t *testing.T) {
+		tb := newTable(t)
+		tb.toQuestions()
+		answerer := tb.currentTurn().AnswererID
+		end(tb)
+
+		tb.send(answerer, protocol.ClientMessage{Type: protocol.TypeNextTurn})
+		assert.Equal(t, protocol.ErrCodeInvalidPhase, tb.clients[answerer].lastError())
+		tb.send(answerer, protocol.ClientMessage{Type: protocol.TypeExtendTurn})
+		assert.Equal(t, protocol.ErrCodeInvalidPhase, tb.clients[answerer].lastError())
+		tb.send("ana", protocol.ClientMessage{Type: protocol.TypeNextTurn})
+		assert.Equal(t, protocol.ErrCodeInvalidPhase, tb.clients["ana"].lastError())
+		assert.Empty(t, tb.store.advanced)
+		assert.Empty(t, tb.store.extended)
+	})
+
+	t.Run("the reveal is not confirmed nor started", func(t *testing.T) {
+		tb := newTable(t)
+		tb.selectTheme(1)
+		tb.send("ana", protocol.ClientMessage{Type: protocol.TypeConfirmReveal})
+		tb.send("bia", protocol.ClientMessage{Type: protocol.TypeConfirmReveal})
+		end(tb)
+
+		tb.send("caio", protocol.ClientMessage{Type: protocol.TypeConfirmReveal})
+		assert.Equal(t, protocol.ErrCodeInvalidPhase, tb.clients["caio"].lastError())
+		// The only player who had not confirmed leaves: an ended match must not start its questions.
+		tb.conns["caio"].Leave()
+		tb.settle()
+		assert.Empty(t, tb.store.questions)
+	})
+
+	t.Run("votes do not change the podium", func(t *testing.T) {
+		tb := newTable(t)
+		tb.toVoting()
+		end(tb)
+
+		tb.everyoneVotesForTheImpostor()
+		assert.Equal(t, protocol.ErrCodeInvalidPhase, tb.clients[tb.impostor()].lastError())
+		assert.Empty(t, tb.store.castVotes)
+		assert.Empty(t, tb.store.finished)
+		for _, p := range tb.snapshot("ana").Players {
+			assert.Zero(t, p.Score, p.ID)
+		}
+	})
+
+	t.Run("the guess is refused", func(t *testing.T) {
+		tb := newTable(t)
+		tb.toVoting()
+		tb.everyoneVotesForTheImpostor()
+		require.Equal(t, "guess", tb.snapshot("ana").Round.Phase)
+		end(tb)
+
+		options := tb.snapshot(tb.impostor()).Round.GuessOptions
+		require.NotEmpty(t, options)
+		tb.guess(tb.impostor(), options[0].ID)
+		assert.Equal(t, protocol.ErrCodeInvalidPhase, tb.clients[tb.impostor()].lastError())
+		assert.Empty(t, tb.store.finished)
+	})
+}
+
+// "Jogar de novo" after an early end must start clean: no timer of the old round may fire on the
+// new match (it used to dereference a nil round and crash the whole process).
+func TestPlayAgain_AfterEndMatchFiresNoStaleTimer(t *testing.T) {
+	tb := newTable(t)
+	tb.selectTheme(1)
+	tb.send("ana", protocol.ClientMessage{Type: protocol.TypeConfirmReveal})
+	tb.send("bia", protocol.ClientMessage{Type: protocol.TypeConfirmReveal})
+	tb.send("ana", protocol.ClientMessage{Type: protocol.TypeEndMatch})
+	tb.conns["caio"].Leave() // honest player closes the app on the podium
+	tb.settle()
+	tb.conns["caio"], tb.clients["caio"] = tb.connect("t-caio")
+
+	tb.send("ana", protocol.ClientMessage{Type: protocol.TypePlayAgain, PlayAgain: &protocol.PlayAgainPayload{TotalRounds: 5}})
+	require.Equal(t, "lobby", tb.snapshot("ana").Match.Status)
+	tb.send("ana", protocol.ClientMessage{Type: protocol.TypeStartMatch})
+	require.Equal(t, "theme_selection", tb.snapshot("ana").Round.Phase)
+
+	tb.clock.Advance(10 * time.Minute)
+	tb.settle()
+	assert.Empty(t, tb.store.advanced)
+	assert.Equal(t, "theme_selection", tb.snapshot("ana").Round.Phase)
+}
+
+// Guess decoys come from the same words the secret could be drawn from: words no other round of
+// the room used. An earlier secret, already revealed in its result, is never offered.
+func TestGuessOptions_DecoysAreUnusedWords(t *testing.T) {
+	tb := newTableWith(t, func(f *fakeLiveStore) {
+		f.themeWords[1] = wordList(11, "Pizza", "Sushi", "Lasanha", "Pastel", "Coxinha")
+		f.candidates[1] = RoundCandidates{Words: wordList(11, "Pizza", "Sushi", "Lasanha", "Pastel", "Coxinha"), Questions: questionList("comida", 5)}
+	})
+	tb.toVoting()
+	first := tb.store.began[0].WordID
+	tb.everyoneVotesForTheImpostor()
+	tb.guess(tb.impostor(), strconv.FormatInt(first, 10))
+	tb.send("ana", protocol.ClientMessage{Type: protocol.TypeNextRound})
+
+	var unused []Word
+	for _, w := range tb.store.themeWords[1] {
+		if w.ID != first {
+			unused = append(unused, w)
+		}
+	}
+	tb.store.candidates[1] = RoundCandidates{Words: unused, Questions: questionList("comida", 5)}
+	tb.toVoting()
+	tb.everyoneVotesForTheImpostor()
+
+	options := tb.snapshot(tb.impostor()).Round.GuessOptions
+	require.NotEmpty(t, options)
+	for _, o := range options {
+		assert.NotEqual(t, strconv.FormatInt(first, 10), o.ID, "the first round's secret is not a possible answer")
+	}
+}
+
+// A words theme needs game.MinGuessWords unused words: with fewer, the found impostor's guess
+// would narrow down to the secret.
+func TestSelectTheme_TooFewUnusedWords(t *testing.T) {
+	tb := newTableWith(t, func(f *fakeLiveStore) {
+		f.candidates[1] = RoundCandidates{Words: wordList(11, "Pizza", "Sushi", "Lasanha")[:game.MinGuessWords-1], Questions: questionList("comida", 5)}
+	})
+	tb.selectTheme(1)
+	assert.Equal(t, protocol.ErrCodeThemeUnavailable, tb.clients["ana"].lastError())
+	assert.Empty(t, tb.store.began)
 }

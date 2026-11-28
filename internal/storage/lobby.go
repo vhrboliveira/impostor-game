@@ -106,7 +106,15 @@ func (r *Rooms) AddPlayer(ctx context.Context, params room.AddPlayerParams) (roo
 			return err
 		}
 
-		count, err := tx.NewSelect().Model((*Player)(nil)).Where("room_id = ?", locked.ID).Count(ctx)
+		// A seat is held by a player who opened the room at least once, or who joined a moment ago
+		// (game.SeatHoldTime): joins that never connect cannot keep the room full.
+		count, err := tx.NewSelect().Model((*Player)(nil)).
+			Where("room_id = ?", locked.ID).
+			Where("left_at IS NULL").
+			WhereGroup(" AND ", func(q *bun.SelectQuery) *bun.SelectQuery {
+				return q.Where("connected_at IS NOT NULL").WhereOr("joined_at > ?", params.Now.Add(-game.SeatHoldTime))
+			}).
+			Count(ctx)
 		if err != nil {
 			return fmt.Errorf("count players: %w", err)
 		}
@@ -122,7 +130,7 @@ func (r *Rooms) AddPlayer(ctx context.Context, params room.AddPlayerParams) (roo
 			LastSeenAt: params.Now,
 		}
 		err = tx.NewInsert().Model(joined).
-			On("CONFLICT (room_id, name) DO NOTHING").
+			On("CONFLICT (room_id, name) WHERE left_at IS NULL DO NOTHING").
 			Returning("id").
 			Scan(ctx)
 		if errors.Is(err, sql.ErrNoRows) {

@@ -1,7 +1,10 @@
 .git
 .github
 .env
+.env.*
+.DS_Store
 bin
 tmp
 docs
 coverage.out
+deploy

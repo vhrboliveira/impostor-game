@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"mime"
 	"net/http"
 
 	"github.com/vhrboliveira/impostor-game/internal/room"
@@ -37,10 +38,12 @@ type sessionResponse struct {
 	Token    string `json:"token"`
 }
 
-// errRequestTooLarge and errInvalidRequest classify body decoding failures.
+// errRequestTooLarge, errInvalidRequest and errUnsupportedMediaType classify body decoding
+// failures.
 var (
-	errRequestTooLarge = errors.New("request body too large")
-	errInvalidRequest  = errors.New("invalid request body")
+	errRequestTooLarge      = errors.New("request body too large")
+	errInvalidRequest       = errors.New("invalid request body")
+	errUnsupportedMediaType = errors.New("request body is not application/json")
 )
 
 // handleCreateRoom serves POST /api/room: it creates a room and makes the caller its host.
@@ -89,8 +92,13 @@ func newSessionResponse(s room.Session) sessionResponse {
 }
 
 // decodeJSON reads exactly one JSON value of at most maxBodyBytes into dst, rejecting unknown
-// fields. It returns errRequestTooLarge or errInvalidRequest.
+// fields. The body must be declared application/json: another site's page cannot send that
+// without a CORS preflight, so it cannot post to these endpoints blindly. It returns
+// errUnsupportedMediaType, errRequestTooLarge or errInvalidRequest.
 func decodeJSON(w http.ResponseWriter, r *http.Request, dst any) error {
+	if mediaType, _, err := mime.ParseMediaType(r.Header.Get("Content-Type")); err != nil || mediaType != "application/json" {
+		return errUnsupportedMediaType
+	}
 	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, maxBodyBytes))
 	decoder.DisallowUnknownFields()
 
@@ -115,11 +123,14 @@ func classifyDecodeError(err error) error {
 }
 
 func writeDecodeError(w http.ResponseWriter, err error) {
-	if errors.Is(err, errRequestTooLarge) {
+	switch {
+	case errors.Is(err, errRequestTooLarge):
 		writeError(w, http.StatusRequestEntityTooLarge, "request_too_large")
-		return
+	case errors.Is(err, errUnsupportedMediaType):
+		writeError(w, http.StatusUnsupportedMediaType, "unsupported_media_type")
+	default:
+		writeError(w, http.StatusBadRequest, "invalid_request")
 	}
-	writeError(w, http.StatusBadRequest, "invalid_request")
 }
 
 // writeRoomError maps a room error (from the Service or the Manager) to its HTTP status and stable error code. Anything
